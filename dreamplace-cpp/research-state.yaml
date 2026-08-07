@@ -1,0 +1,15 @@
+project: dreamplace-cpp
+question: Can a standalone C++17 reconstruction reproduce DREAMPlace quality on ISPD 2005 without ePlace warm starts?
+status: validated
+locked_constraints:
+  - raw Bookshelf .pl only
+  - reject ePlace, NSP, and GP placement artifacts
+  - center Gaussian initialization with seed 1000
+  - report pre-legal, post-legal, and post-detailed HPWL separately
+  - legal2.pl is the final legality gate
+primary_benchmarks: [adaptec1, adaptec2]
+paper_targets:
+  adaptec1_final_hpwl_m: 73.22
+  adaptec2_final_hpwl_m: 82.22
+current_hypothesis: H1
+next_action: close the remaining 2-3% legal HPWL gap with mixed spectral fields and stronger legal detailed placement

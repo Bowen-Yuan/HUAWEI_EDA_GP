@@ -1,0 +1,243 @@
+\documentclass[11pt,a4paper]{ctexart}
+\usepackage[margin=2.35cm]{geometry}
+\usepackage{amsmath,amssymb,booktabs,array,longtable}
+\usepackage{graphicx,float,xcolor}
+\usepackage{hyperref}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\hypersetup{colorlinks=true,linkcolor=blue!55!black,urlcolor=blue!55!black}
+\setlength{\parindent}{2em}
+\setlength{\parskip}{0.25em}
+
+\newcommand{\hpwl}{\operatorname{HPWL}}
+\newcommand{\ov}{\operatorname{overflow}}
+\newcommand{\code}[1]{\texttt{\detokenize{#1}}}
+
+\title{精确非光滑 HPWL 布局器的高分辨率密度、\\可行域精修与详细布局研究}
+\author{HUAWEI\_EDA / DREAMPlace C++ 技术报告}
+\date{2026 年 8 月 6 日}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本报告研究独立 C++17 布局器在\textbf{不平滑 HPWL}的约束下，如何通过高分辨率静电密度、可行域后的优化器重置、低 overflow bundle 聚合，以及 DREAMPlace 风格详细布局算子改善 ISPD2005 adaptec1 的结果。全局目标始终使用带 pin offset 的精确 HPWL 次梯度；加权平均线长、log-sum-exp 等代理未参与本轮实验。实现新增了默认关闭的可行域精修和 CPU 详细布局开关，旧命令保持原行为。
+
+64$\times$64 网格的原结果为全局布局 90.069M/6.952\%，合法后 114.017M。仅在同一全局解上加入 K-Reorder、global swap 和 independent-set matching，合法 HPWL 降至 110.575M。将网格提高到 512$\times$512 后，普通 Adam 的合法结果降至 91.120M；进一步加入低 overflow bundle 与窄带精修后，当前最佳合法结果为 91.030M，官方 \code{legal2.pl} 的 Type 0/1/2/3 均为 0。另一方面，单独精修虽然把全局 HPWL 从 85.886M 降到 85.291M，却使合法后 HPWL 从 91.120M 升到 91.221M，说明当前瓶颈已包含明显的合法化感知缺失。
+\end{abstract}
+
+\section{问题与实验口径}
+
+本轮求解的是
+\begin{equation}
+  \min_{x,y}\; H(x,y)+\lambda E_\rho(x,y),
+  \qquad
+  H(x,y)=\sum_{e}w_e\left[
+  \max_{i\in e}p^x_i-\min_{i\in e}p^x_i+
+  \max_{i\in e}p^y_i-\min_{i\in e}p^y_i\right],
+  \label{eq:objective}
+\end{equation}
+其中 $p_i$ 包含 pin offset。$H$ 是分段线性的非光滑函数；并列极值 pin 的次梯度在并列集合中均分。高扇出限制只用于方向计算，报告 HPWL 始终统计全部网。
+
+外部参照采用随机次梯度论文表 5 对 DREAMPlace 的描述：adaptec1 在 legalization 前为 70.3M/6.92\%。该数字与本报告的 GP 列可比较，但不能与“合法 HPWL”列直接比较。当前最佳同口径 GP 为 84.485M/6.906\%，相对参照仍高约 20.18\%；因此本轮没有达到 DREAMPlace 的全局布局参照线。报告保留合法后结果，是因为用户目标还要求验证详细布局和几何合法性。
+
+所有实验均从原始 Bookshelf 数据和中心高斯初始化开始，seed 为 1000；不读取 ePlace、NSP 或已有成熟布局。迭代预算固定为 800，target density 为 1.0，停止阈值为 7\%。
+
+\section{高分辨率静电密度}
+
+\subsection{逐网格建模}
+
+密度模型是逐网格求解，而不是对所有单元对逐点计算。每个可移动单元、固定宏和 filler 的矩形面积按与 bin 的真实交叠面积沉积：
+\begin{equation}
+  q_b=\sum_i r_i\,\operatorname{area}(R_i\cap B_b),
+  \qquad
+  r_i=\frac{w_i h_i}{\widetilde w_i\widetilde h_i}.
+\end{equation}
+小单元在沉积时被拉伸到至少 $\sqrt 2$ 倍 bin 尺寸，并用 $r_i$ 保持电荷总量不变。固定宏预先沉积为固定密度；filler 参与电势目标，但按照 DREAMPlace 的停止口径，不计入 overflow 分子。当前实现的 overflow 为
+\begin{equation}
+  \ov=\frac{\sum_b\left[q_b-\rho_t A_b\right]_+}
+  {\sum_{i\in\text{movable}}w_i h_i}.
+\end{equation}
+
+去均值后的电荷密度 $\rho$ 通过二维 DCT 求解离散 Poisson 方程：
+\begin{equation}
+ -\nabla^2\phi=\rho,\qquad
+ E_\rho=\frac12\sum_b\rho_b\phi_b A_b.
+\end{equation}
+电势梯度目前由中心有限差分计算，再按单元与 bin 的交叠电荷收集回坐标梯度。该处与上游 DREAMPlace 的混合正弦/余弦谱梯度不同，是仍需继续校准的实现差异。
+
+\subsection{为什么提高分辨率有效}
+
+adaptec1 布局区域约为 $10692\times10680$。64、256、512 网格的 bin 尺寸分别约为 $167\times167$、$41.8\times41.7$ 和 $20.9\times20.9$；标准单元高度为 12。64 网格无法分辨行级空隙和宏边界附近的窄通道，因而相同的 7\% overflow 可能对应完全不同的局部重叠结构。512 网格虽仍粗于行高，但已能显著缩小从连续全局解到行合法解的位移。
+
+实验中，256 网格的 GP 到最终合法增量为 8.055M，而 512 普通 Adam 的增量降至 5.234M。512 的 GP HPWL 反而比 256 高 0.173M，因此最终收益主要来自\textbf{可合法化的空间分布}，而非 GP 线长本身。
+
+\section{可行域后的优化策略}
+
+\subsection{原策略的问题}
+
+原 Adam 路径在进入 7\% 后仍按 HPWL 变化更新密度权重，同时保留早期高 overflow 阶段的一阶、二阶矩。512 对照中最佳可行点出现在第 648 步，随后有效 $\lambda$ 继续增至 15.59，末步 overflow 被压到 4.37\%，但 HPWL 上升到 89.318M。恢复 best-feasible checkpoint 可以避免输出恶化，却不能利用后续预算降低边界上的 HPWL。
+
+\subsection{窄带可行域精修}
+
+新增 \code{--feasible-refinement} 在首次满足 $\ov\le0.07$ 时执行：
+\begin{enumerate}
+  \item 清空 Adam 一阶矩、二阶矩和 AMSGrad 最大二阶矩；
+  \item 清空旧 bundle cuts，并将 optimizer 切换为 AMSGrad；
+  \item 学习率乘 0.05；
+  \item 用 6.5\%--7.0\% 窄带反馈替代原 lambda 增长律。
+\end{enumerate}
+
+令 $\eta=\lambda/\lambda_0$，窄带更新写为
+\begin{equation}
+  \eta_{k+1}=\operatorname{clip}
+  \left(\eta_k\exp(\Delta_k),\eta_{\min},\eta_{\max}\right),
+\end{equation}
+其中 overflow 超过上界时 $\Delta_k>0$，低于下界时 $\Delta_k<0$；带内只缓慢释放密度压力，且每步 $\Delta_k$ 被截断到 $[-0.05,0.05]$。512 实验中有效 $\lambda$ 最终稳定在 0.018 左右，没有再次指数爆涨。
+
+\subsection{低 overflow bundle}
+
+bundle 只聚合精确 HPWL cuts，不把权重变化的密度项存入模型。第 $j$ 个 cut 为
+\begin{equation}
+  m_j(x)=H(x_j)+g_j^\top(x-x_j),\qquad g_j\in\partial H(x_j).
+\end{equation}
+实现最多保留 4 个 cut，并在 overflow 低于 12\% 后才启用。小规模对偶问题在单纯形上用 Frank--Wolfe 迭代求权重，再将聚合次梯度与当前次梯度各按 0.5 混合。该设计试图抑制极值 pin active-set 切换造成的方向翻转，同时避免高拥塞区的旧 HPWL cut 干扰密度展开。
+
+\section{DREAMPlace 风格详细布局}
+
+新增 \code{--dreamplace-detailed} 是上游算子序列的 CPU 同类实现，不是 CUDA 内核的逐行复刻。所有阶段都在合法 segment 或等尺寸合法槽位上操作，并以受影响网的真实 pin-offset HPWL 复核；只有严格下降才接受。
+
+\subsection{合法化基础}
+
+固定宏先切割每一行，形成不穿越障碍物的 segment。Greedy/Tetris 将单元按全局布局的横向顺序放入最近可行 segment；Abacus 使用 PAVA 型等距回归，在保持单元顺序的条件下压缩位移。每阶段后检查边界、site 对齐、可移动单元重叠和固定宏重叠。
+
+\subsection{K-Reorder}
+
+每个 segment 内按 $x$ 排序，滑动取 $K=4$ 个连续单元。窗口的左边界与原空隙序列固定，枚举至多 $4!=24$ 个排列。对每个排列只重算窗口单元 incident nets 的 HPWL，选择严格最优排列。三轮扫描分别利用前一轮产生的新邻接关系。由于窗口总宽度和空隙不变，窗口仍留在原合法区间。
+
+\subsection{Global Swap}
+
+单元按精确宽高分组，只有等尺寸单元可交换。对单元 $i$，由其各 incident net 中除 $i$ 外的 pin bbox 中心形成目标坐标；在该尺寸组的有序槽位中搜索目标附近候选。交换两个等尺寸合法槽位不会破坏 site 对齐和局部几何容量。交换前后计算两单元 incident nets 的并集 HPWL，仅接受严格下降。
+
+\subsection{Independent-Set Matching}
+
+从同尺寸单元中构造至多 4 个单元的集合，并要求集合成员之间没有共享 net。原位置作为可交换槽位，逐一计算 cell-to-slot 的精确 incident-net HPWL 代价。因为集合内不共享网，该代价可以相加；当前小集合直接枚举槽位排列，等价于求解该规模的最小权完美匹配。应用最优排列后，再用受影响网并集做一次真实 HPWL 复核。
+
+固定 64 网格 GP checkpoint 的阶段消融见表~\ref{tab:dp-ablation}。高级详细布局将旧 adjacent reorder 的 114.017M 降至 110.575M，改善 3.02\%。
+
+\begin{table}[H]
+\centering
+\caption{固定同一 64$\times$64 全局解的详细布局消融，单位 M。}
+\label{tab:dp-ablation}
+\begin{tabular}{lr}
+\toprule
+阶段 & 精确 HPWL\\
+\midrule
+全局布局 checkpoint & 90.069\\
+Greedy & 118.233\\
+Abacus & 118.876\\
+旧 adjacent reorder & 114.017\\
+K-Reorder & 111.625\\
+Global swap & 110.783\\
+Independent-set matching & 110.575\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{数值结果}
+
+\begin{table}[H]
+\centering
+\small
+\caption{adaptec1 的 800 步消融。GP HPWL 和合法 HPWL 单位为 M。}
+\label{tab:results}
+\begin{tabular}{lrrrrr}
+\toprule
+配置 & 网格 & GP HPWL & Overflow & 合法 HPWL & GP 秒\\
+\midrule
+旧 exact Adam + 旧 DP & 64 & 90.069 & 6.952\% & 114.017 & 162.8\\
+旧 exact Adam + 新 DP & 64 & 90.069 & 6.952\% & 110.575 & 162.8\\
+Exact Adam & 256 & 85.713 & 6.610\% & 93.768 & 172.1\\
+Exact Adam & 512 & 85.886 & 6.408\% & 91.120 & 207.2\\
+Exact Adam + refine & 512 & 85.291 & 6.954\% & 91.221 & 208.1\\
+Exact Adam + bundle + refine & 256 & \textbf{84.485} & 6.906\% & 93.239 & 181.1\\
+Exact Adam + bundle + refine & 512 & 85.401 & 6.958\% & \textbf{91.030} & 214.7\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=0.94\textwidth,height=7.2cm,
+  xlabel={迭代},ylabel={精确 HPWL (M)},
+  xmin=0,xmax=800,ymin=40,ymax=105,
+  grid=major,legend style={font=\small,at={(0.5,-0.20)},anchor=north,legend columns=2}]
+\addplot[blue,thick] table[x=iteration,y expr=\thisrow{exact_hpwl}/1000000,col sep=comma] {../output/exact_adam_256_800_dp/global_metrics.csv};
+\addlegendentry{256 Adam}
+\addplot[red,thick] table[x=iteration,y expr=\thisrow{exact_hpwl}/1000000,col sep=comma] {../output/exact_adam_512_800_dp/global_metrics.csv};
+\addlegendentry{512 Adam}
+\addplot[teal!70!black,thick] table[x=iteration,y expr=\thisrow{exact_hpwl}/1000000,col sep=comma] {../output/exact_adam_256_800_refine_bundle_dp/global_metrics.csv};
+\addlegendentry{256 bundle+refine}
+\addplot[black,thick] table[x=iteration,y expr=\thisrow{exact_hpwl}/1000000,col sep=comma] {../output/exact_adam_512_800_refine_bundle_dp/global_metrics.csv};
+\addlegendentry{512 bundle+refine}
+\end{axis}
+\end{tikzpicture}
+\caption{高分辨率与后段 bundle/refinement 的精确 HPWL 轨迹。图中曲线从头到尾均为非光滑精确 HPWL。}
+\label{fig:hpwl}
+\end{figure}
+
+最小 GP HPWL 来自 256 bundle+refine，但最小合法 HPWL 来自 512 bundle+refine。这一排序反转与 256 网格更大的合法化增量一致。512 单独 refine 是重要负结果：GP 改善 0.595M，合法结果却恶化 0.102M。因而只按 GP best-feasible 选择 checkpoint 已不足以指导最终质量。
+
+最佳 512 bundle+refine 的详细布局阶段为：prelegal 85.401M，Greedy 91.697M，Abacus 91.934M，K-Reorder 91.113M，global swap 91.051M，independent-set matching 91.030M。官方 ISPD2005 \code{legal2.pl} 使用 row window 10 验收，Type 0/1/2/3 为 0/0/0/0。
+
+\section{讨论与改进方向}
+
+\subsection{当前最主要的问题}
+
+第一，连续密度可行性与行合法化代价仍未统一。精修直接降低 GP HPWL，但可能把单元推入对 Greedy/Abacus 不利的行间分布。第二，当前合法化是单向流水线，不会把合法化位移或合法 HPWL 反馈给全局布局。第三，有限差分电场梯度与上游谱梯度存在差异。第四，CPU global swap 只交换等尺寸槽位，独立集大小限制为 4，没有覆盖上游更广的候选空间和 GPU 并行搜索。
+
+\subsection{优先建议}
+
+\begin{enumerate}
+  \item \textbf{多 checkpoint 合法化选择。}在 6.5\%--7.0\% 内每 10--20 步保存候选，用快速 Greedy+一轮 K-Reorder 估计合法 HPWL，再对最优少数候选执行完整 DP。该方法直接修正本轮观察到的排序反转。
+  \item \textbf{合法化感知代理。}在全局目标中加入到最近 row/segment 的小权重近端项，或交替执行短程合法化投影和精确 HPWL 次梯度，避免只优化连续平面中的不可实现方向。
+  \item \textbf{分层密度网格。}前期用 128/256 网格快速展开，overflow 降到 15\% 后切换 512 或 1024 网格，并在切换时重新标定 $\lambda_0$。这比从第 0 步始终使用最高分辨率更节省时间。
+  \item \textbf{完整 serious/null-step bundle。}当前实现是 cut 聚合器，尚未用预测下降与真实下降决定 serious step，也没有独立 proximal 半径。完整 bundle 应只建模精确 HPWL，并把密度作为当前约束梯度。
+  \item \textbf{谱梯度对齐。}用混合 DCT/DST 直接计算电场，消除有限差分的网格尺度误差，再重新校准高分辨率 lambda。
+  \item \textbf{增强详细布局。}扩大 independent set，使用 Hungarian 算法；global swap 增加空白槽和非等宽可行交换；K-Reorder 根据收益自适应选择窗口，并加入 row-to-row local relegalization。
+\end{enumerate}
+
+\section{可复现性与兼容性}
+
+新功能全部默认关闭。旧命令仍使用 weighted-average + BB--Nesterov 和原详细布局。最佳非光滑实验命令为：
+\begin{verbatim}
+.\dreamplace_cpp.exe ..\alg-electronic\ispd2005\adaptec1\adaptec1 \
+  --exact-hpwl --optimizer adam --iterations 800 --bins 512 \
+  --stop-overflow 0.07 --feasible-refinement \
+  --refine-lower-overflow 0.065 --refine-lr-scale 0.05 \
+  --refine-lambda-gain 0.20 --bundle-hpwl --bundle-size 4 \
+  --bundle-interval 5 --bundle-start-overflow 0.12 \
+  --bundle-current-mix 0.50 --dreamplace-detailed \
+  --output output\exact_adam_512_800_refine_bundle_dp
+\end{verbatim}
+
+每个实验目录包含 \code{global_metrics.csv}、\code{global.pl}、\code{final.pl} 和 \code{summary.txt}。统一消融表位于 \code{report/high_resolution_ablation.csv}；最佳结果的官方检查日志和摘要位于对应 output 目录。
+
+\section{结论}
+
+本轮在不平滑 HPWL、800 步预算和原始 center 初始化口径下完成了三项扩展。高分辨率密度是主导改进：它将 64 网格的合法 114.017M 降到 512 网格的约 91.1M，主要通过减少合法化位移实现。CPU K-Reorder、global swap 和独立集匹配在固定 64 网格 checkpoint 上贡献 3.02\% 的额外下降，并保持官方完全合法。可行域精修消除了 lambda 爆涨，bundle 在 512 网格上带来约 0.10\% 的最终合法收益，但没有达到 70.3M 的 DREAMPlace GP 参照。下一阶段应从“连续 GP 最优”转向“合法化后最优”，优先实施多 checkpoint 快速合法化选择与合法化感知的全局更新。
+
+\begin{thebibliography}{9}
+\bibitem{dreamplace}
+Y. Lin et al., ``DREAMPlace: Deep Learning Toolkit-Enabled GPU Acceleration for Modern VLSI Placement,'' DAC, 2019.
+
+\bibitem{stochastic}
+``An Efficient Stochastic Subgradient Method for the Global Placement Problem in Very Large-Scale Integration Circuits,'' 项目 reference 目录收录版本，表 5。
+
+\bibitem{repo}
+Y. Lin et al., \emph{DREAMPlace}, GitHub repository, \url{https://github.com/limbo018/DREAMPlace}.
+\end{thebibliography}
+
+\end{document}

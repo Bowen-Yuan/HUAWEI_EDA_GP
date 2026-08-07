@@ -1,0 +1,8 @@
+case,bins,bundle,refinement,gp_hpwl_m,gp_overflow_percent,legal_hpwl_m,gp_seconds,legal2
+exact_adam_64_legacy,64,no,no,90.069331,6.951696,114.017212,162.815,0/0/0/0
+exact_adam_64_extended_dp,64,no,no,90.069331,6.951696,110.575257,162.815,0/0/0/0
+exact_adam_256,256,no,no,85.712543,6.610217,93.767907,172.060,internal
+exact_adam_512,512,no,no,85.885592,6.407957,91.119867,207.176,internal
+exact_adam_512_refine,512,no,yes,85.290653,6.953656,91.221385,208.083,internal
+exact_adam_256_bundle_refine,256,yes,yes,84.484794,6.906081,93.238772,181.127,internal
+exact_adam_512_bundle_refine,512,yes,yes,85.401011,6.957819,91.029817,214.665,0/0/0/0

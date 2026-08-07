@@ -1,0 +1,22 @@
+# External datasets
+/data/
+
+# Build products
+/build/
+/dreamplace_cpp.exe
+*.o
+*.obj
+*.pdb
+*.ilk
+
+# Generated experiments and temporary files
+/output/
+/tmp/
+/-p/
+__pycache__/
+*.py[cod]
+
+# LaTeX intermediate files (keep .tex and .pdf)
+*.aux
+*.log
+*.out

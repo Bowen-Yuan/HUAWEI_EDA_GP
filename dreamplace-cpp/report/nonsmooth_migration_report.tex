@@ -1,0 +1,324 @@
+\documentclass[UTF8,a4paper,11pt]{ctexart}
+
+\usepackage[margin=2.35cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs,longtable,tabularx}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,fit}
+
+\hypersetup{colorlinks=true,linkcolor=blue!45!black,urlcolor=blue!55!black}
+\lstset{
+  basicstyle=\ttfamily\small,
+  columns=fullflexible,
+  breaklines=true,
+  frame=single,
+  rulecolor=\color{black!25},
+  backgroundcolor=\color{black!2}
+}
+\newcommand{\HPWL}{\operatorname{HPWL}}
+\newcommand{\OVF}{\operatorname{overflow}}
+
+\title{DREAMPlace C++ 中非光滑 HPWL 求解方法的迁移与合法化实现}
+\author{HUAWEI\_EDA 项目技术报告}
+\date{2026年8月6日}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本报告研究如何在已有的独立 C++ DREAMPlace 流程中迁入项目原有的非光滑优化方法，同时保留已验证的中心高斯初始化、填充单元、静电密度、可行点选择和合法化流程。迁移后的可选目标为精确半周长线长（HPWL）与静电密度能量之和；HPWL 直接由带引脚偏移的极值计算，未进行任何平滑。求解层支持 Heavy Ball、Adam、AMSGrad 和 AdaGrad，密度权重支持 DREAMPlace 增量、目标轨迹和基准比值三类控制器，并可对 HPWL 次梯度单独进行 bundle 聚合。默认调用仍采用原有的加权平均线长与 BB--Nesterov，因此旧命令的行为不变。adaptec1 的 64\(\times\)64 网格、800 步验证表明，Exact HPWL + Adam + DREAMPlace lambda 能选出 HPWL 为 90.069M、overflow 为 6.952\% 的全局布局点，合法化后 HPWL 为 114.017M；ISPD 2005 官方 \texttt{legal2.pl} 对四类错误的计数均为零。迁移接口和合法化链路已经成立，但非光滑模式的线长质量尚未达到原平滑基线；trajectory + bundle 的本次结果进一步恶化到 118.153M，说明后续工作应集中于阶段化步长、优化器切换和合法化后候选选择，而不能把接口可运行等同于算法质量已经收敛。
+\end{abstract}
+
+\noindent\textbf{关键词：} 全局布局；非光滑 HPWL；静电密度；自适应优化器；bundle 方法；合法化
+
+\section{问题与迁移边界}
+
+原 C++ 流程求解加权平均线长与静电密度能量的平滑组合，并使用 DREAMPlace 风格的 BB--Nesterov 更新。需要迁入的新模式则求解
+\begin{equation}
+  \min_{\boldsymbol{x}}\quad
+  H(\boldsymbol{x})+\lambda D(\boldsymbol{x}),
+  \qquad H(\boldsymbol{x})=\HPWL(\boldsymbol{x}),
+  \label{eq:objective}
+\end{equation}
+其中 \(H\) 是分段线性、不可微的精确 HPWL，\(D\) 是网格静电密度能量。迁移边界被限定为：不读取 ePlace、NSP 或已有成熟布局；不改变 Bookshelf 原始输入方式；不替换中心高斯初始化、电场、filler、overflow、checkpoint 和合法化；不把 HPWL 平滑化；旧命令必须保持原行为。
+
+直接把非光滑次梯度送入原 BB 步长估计并不稳妥。BB 公式中的
+\begin{equation}
+  \alpha_k=\frac{s_k^{\mathsf T}y_k}{y_k^{\mathsf T}y_k}
+\end{equation}
+把相邻梯度差当作局部曲率信息，而 HPWL 极值引脚发生切换时，\(y_k\) 会出现与平滑曲率无关的跳变。因此本次迁移建立可切换求解层，而没有改写或删除已经验证的平滑路径。
+
+\section{可切换求解架构}
+
+图~\ref{fig:architecture} 给出迁移后的执行关系。\texttt{--exact-hpwl} 是显式开关；无该开关时仍进入 Weighted Average + BB--Nesterov。全局布局结束后，两条路径共用同一 checkpoint 和合法化实现。
+
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}[
+  box/.style={draw,rounded corners=2pt,minimum width=4.7cm,minimum height=0.8cm,align=center,fill=gray!5},
+  branch/.style={draw,rounded corners=2pt,text width=6.1cm,minimum height=1.1cm,align=center},
+  arrow/.style={-{Latex[length=2.2mm]},thick},
+  node distance=6mm and 9mm]
+  \node[box] (input) at (0,0) {原始 Bookshelf + 中心高斯初始化 + filler};
+  \node[branch,fill=blue!6] (smooth) at (-3.35,-2.0) {默认：Weighted Average\\BB--Nesterov + DREAMPlace lambda};
+  \node[branch,fill=green!7] (exact) at (3.35,-2.0) {可选：Exact HPWL\\Adam/AMSGrad/AdaGrad/Heavy Ball\\DREAMPlace/trajectory/ratio + HPWL bundle};
+  \node[box] (electric) at (0,-4.35) {共享静电密度、边界投影与可行 checkpoint};
+  \node[box] (legal) at (0,-5.55) {行分段 $\rightarrow$ Greedy/Tetris $\rightarrow$ Abacus/PAVA $\rightarrow$ 合法详细重排};
+  \node[box] (check) at (0,-6.75) {内部合法性检查 + ISPD \texttt{legal2.pl}};
+  \draw[arrow] (input) -- (smooth);
+  \draw[arrow] (input) -- (exact);
+  \draw[arrow] (smooth) -- (electric);
+  \draw[arrow] (exact) -- (electric);
+  \draw[arrow] (electric) -- (legal);
+  \draw[arrow] (legal) -- (check);
+\end{tikzpicture}
+\caption{迁移后的可切换全流程。默认路径与原调用行为保持不变。}
+\label{fig:architecture}
+\end{figure}
+
+主要实现位于 \texttt{src/nonsmooth.cpp}、\texttt{src/wirelength.cpp} 和 \texttt{src/optimizer.cpp}。枚举接口把线长模型、方向求解器和 lambda 控制器分开，运行摘要同时记录三者，从而使每个结果可追溯。对不兼容组合会立即报错：精确 HPWL 不允许使用原 BB--Nesterov；平滑模式当前也不会悄悄改用为非光滑目标设计的优化器。
+
+\section{非光滑 HPWL 与静电密度}
+
+\subsection{带引脚偏移的精确次梯度}
+
+引脚坐标按
+\begin{equation}
+  p_{i,x}=x_i+\Delta x_i,\qquad
+  p_{i,y}=y_i+\Delta y_i
+\end{equation}
+计算。每条网在一个坐标轴上的代价是 \(\max_i p_i-\min_i p_i\)。若最大值或最小值由多个引脚并列取得，次梯度在相应极值集合中均分：
+\begin{equation}
+  g_i=
+  \begin{cases}
+  +w_e/n_{\max}, & p_i=\max_j p_j,\\
+  -w_e/n_{\min}, & p_i=\min_j p_j,\\
+  0, & \text{其他情况}.
+  \end{cases}
+\end{equation}
+同一引脚同时处于最小值和最大值时两项相消。固定单元参与网边界的计算，但其坐标梯度保持为零。实现对所有网报告精确 HPWL，同时允许用 degree limit 排除超大网的方向贡献。单元测试覆盖了引脚偏移、固定节点和并列极值均分。
+
+\subsection{逐网格静电场}
+
+密度不是对单元两两计算斥力，而是逐网格求解。每个可移动单元和 filler 先被拉伸到至少 \(\sqrt{2}\) 个 bin 的宽、高，再用面积比例保持总电荷不变。固定宏的几何覆盖被预存为固定密度图，因此宏区域本身参与电势与排斥作用。
+
+令 \(\rho\) 为网格相对密度，去掉零频分量后利用二维 DCT 求解离散 Poisson 方程
+\begin{equation}
+  -\nabla^2\phi=\rho-\bar\rho,
+  \qquad
+  \widehat{\phi}_{uv}=\frac{\widehat{\rho}_{uv}}
+  {k_u^2+k_v^2}\quad (u,v)\ne(0,0).
+\end{equation}
+密度能量与电场分别为
+\begin{equation}
+  D=\frac{1}{2}\sum_b \rho_b\phi_b A_b,
+  \qquad \boldsymbol{E}=-\nabla\phi.
+\end{equation}
+当前 C++ 实现用势函数的中心有限差分形成 \(\nabla\phi\)，再按单元与 bin 的覆盖面积收集密度梯度。优化器执行负梯度步，因此高势密集区中的单元沿电场方向移出；这就是“静电场将单元推开”的数值实现。
+
+overflow 采用容量超额而非能量：
+\begin{equation}
+  \OVF=\frac{\sum_b\max(0,\rho_b^{\mathrm{mov+fixed}}-ho_t A_b)}
+  {A_{\mathrm{mov}}}.
+  \label{eq:overflow}
+\end{equation}
+filler 参与电势目标，但不进入式~\eqref{eq:overflow} 的停止指标，这与 DREAMPlace 的 overflow 调用语义一致。overflow 是连续全局布局的密度指标，不是几何合法性的充分条件。
+
+\section{优化器、lambda 与 bundle 迁移}
+
+\subsection{联合方向与优化器}
+
+密度激活后，单元 \(i\) 的预条件方向写为
+\begin{equation}
+  d_i=\frac{g_{H,i}+\lambda g_{D,i}}
+  {\max(1,\,w_i^{\mathrm{pin}}+\lambda A_i)}.
+\end{equation}
+filler 没有 HPWL 梯度，只沿当前密度场移动。求解器支持 Heavy Ball、Adam、AMSGrad 和 AdaGrad。以 Adam 为例，
+\begin{align}
+  m_k&=\beta_1m_{k-1}+(1-\beta_1)d_k,\\
+  v_k&=\beta_2v_{k-1}+(1-\beta_2)d_k^2,\\
+  x_{k+1}&=\Pi_\Omega\!\left(x_k-alpha_k
+  \frac{\widehat m_k}{\sqrt{\widehat v_k}+\epsilon}\right),
+\end{align}
+其中 \(\Pi_\Omega\) 把单元中心投影到布局边界内。步长按布局周长的无量纲比例给定并随迭代缓慢衰减。AMSGrad 对二阶矩使用历史上界，AdaGrad 累积平方梯度，Heavy Ball 则保留指数动量。迁移实现均为项目内 C++ 代码，没有调用外部优化器库。
+
+\subsection{无量纲 lambda 控制}
+
+不同电场网格和数据集的密度梯度量级差异很大，旧框架中的 lambda 数值不能直接复制。因此首先按梯度范数建立物理尺度
+\begin{equation}
+  \lambda_0=8\times10^{-5}
+  \frac{\lVert g_H\rVert_1}{\lVert g_D\rVert_1},
+  \qquad \lambda_k=\eta_k\lambda_0,
+  \label{eq:lambda}
+\end{equation}
+控制器只更新无量纲量 \(\eta\)。这也修补了“lambda 只被记录、没有真正控制密度梯度”的旧问题：式~\eqref{eq:lambda} 的有效权重在每一步直接乘入 movable 和 filler 的密度梯度。
+
+三类控制器如下。
+
+\begin{enumerate}
+  \item \textbf{DREAMPlace 增量策略：}根据相邻步精确 HPWL 的增量，在约 \([0.95,1.05]\) 范围内逐步缩放 \(\eta\)。该策略保留原方法的逐步增长特征，但输入已经改为精确 HPWL。
+  \item \textbf{目标轨迹策略：}用 smoothstep 构造从初始 overflow 到目标 overflow 的期望轨迹，组合位置误差、下降趋势误差和有限积分误差。控制器每隔 \(q\) 步评估一次，log-lambda 改变量按 \(q\) 换算为等效逐步增益，避免控制速度无意中减慢 \(q\) 倍。
+  \item \textbf{基准比值策略：}比较 \(H/H_{\mathrm{base}}\) 与 \(\OVF/\OVF_{\mathrm{base}}\)。由于 lambda 乘在密度项上，overflow 相对压力更大时提高 lambda；达到可行域而 HPWL 压力更大时降低 lambda。
+\end{enumerate}
+
+初版把 \(\eta\) 的上限设为 \(10^6\)。adaptec1 探针显示此时物理 lambda 只能达到 \(4.63\times10^{-4}\)，800 步停在 13.315\% overflow。放宽数值安全上限到 \(10^{12}\) 后，同一配置进入 7\% 可行域。该修补没有改变目标函数，只避免控制器在物理权重尚不足时被人为截断。
+
+\subsection{仅聚合 HPWL 的 bundle 方向}
+
+第 \(j\) 个历史点形成 HPWL 切平面
+\begin{equation}
+  m_j(x)=H(x_j)+g_j^{\mathsf T}(x-x_j).
+\end{equation}
+保留的切平面通过单纯形上的小规模二次对偶模型求权重 \(\alpha_j\)，对偶问题用 20 步 Frank--Wolfe 迭代近似求解，得到
+\begin{equation}
+  \bar g_H=\sum_j\alpha_jg_j,
+  \qquad
+  d_k=\theta g_{H,k}+(1-\theta)\bar g_H+\lambda_k g_{D,k}.
+\end{equation}
+这里只 bundle 非光滑 HPWL；密度项始终使用当前点、当前 lambda 的梯度。把历史密度梯度放入 bundle 会混合不同权重下的目标，也没有必要用切平面近似本来就平滑的密度能量。bundle 只在 overflow 低于阈值后启动，并由固定间隔或次梯度夹角触发新 cut。本实现属于 bundle-inspired 聚合方向，还没有 serious step/null step 和可信域半径更新，因此不能宣称为完整 proximal bundle 算法。
+
+\section{checkpoint 与合法化实现}
+
+\subsection{全局布局点的选择}
+
+每一步同时记录精确 HPWL、overflow、密度能量、物理 lambda、无量纲控制量、学习率和 bundle 状态。当 \(\OVF\leq 7\%\) 时，按最小预合法化 HPWL 更新 feasible checkpoint；如果整个预算内没有可行点，则恢复最小 overflow 点。恢复操作同时覆盖 movable 和 filler 坐标，但只有 movable 坐标被写入 Bookshelf 结果。
+
+\subsection{固定宏切割行段}
+
+合法化不依赖全局布局目标。首先遍历每条 placement row，把与该行相交的固定宏投影为阻塞区间；重叠阻塞区间被合并，剩余区间按 site spacing 向内取整，形成不可跨越的合法 segment。因此固定宏不是事后碰撞检查才出现，而是在合法位置集合构造时就被扣除。
+
+\subsection{Greedy/Tetris 放置}
+
+可移动单元按全局布局的目标 \(x\) 从左到右稳定排序；相同 \(x\) 时优先较宽单元。对单元 \(i\)，从其最近行向上下扩展搜索，在各 segment 的空闲区间中寻找 site 对齐位置，并最小化
+\begin{equation}
+  C_i=|x_i-x_i^{\mathrm{GP}}|+2|y_i-y_i^{\mathrm{GP}}|.
+\end{equation}
+选中位置后，该占用区间立即从 segment 的 free list 中扣除。这一步保证边界、行高、site 对齐、固定宏避让和 movable 互不重叠。保持 GP 的左右次序很重要：此前 width-first 全局排序虽然容易填充碎片，却曾把 adaptec1 的合法 HPWL 恶化到约 124M。
+
+\subsection{Abacus/PAVA 压缩}
+
+对每个 segment，按当前左右次序固定单元排列。令第 \(i\) 个单元左边界为 \(l_i\)，前缀宽度为 \(P_i\)，并作变量替换 \(z_i=l_i-P_i\)。不重叠约束转化为单调约束
+\begin{equation}
+  z_1\le z_2\le\cdots\le z_n,
+\end{equation}
+边界为 \(z_{\min}=L\)、\(z_{\max}=R-P_n\)。代码用池相邻违背算法（PAVA）合并逆序 block，再把解吸附到 site 网格。该过程近似最小化相对 GP 目标位置的平方位移，同时严格留在原 segment 内。
+
+\subsection{合法详细重排}
+
+详细阶段只尝试同一 segment 内的相邻单元交换。交换时保持该对单元占据的总区间和原间隙不变，因此不会破坏边界、site 对齐或无重叠性质。代价只重算两个单元关联网的精确 pin-offset HPWL；仅当代价严格下降时接受交换。默认执行三遍，之后再次运行完整内部合法性检查。
+
+\subsection{双重合法性验收}
+
+内部检查验证：单元位于 row 边界内、左边界与 site 对齐、不与固定宏重叠、同一行 movable 之间不重叠。外部 \texttt{legal2.pl} 进一步按 ISPD 2005 定义检查四类错误：Type 0 固定端点移动，Type 1 越界，Type 2 行或 site 未对齐，Type 3 对象重叠。合法化后的 overflow 不需要为零：合法性是离散几何约束，overflow 是连续网格密度指标；一旦进入合法化结果，评价应以合法性和最终 HPWL 为主。
+
+\section{验证方法与结果}
+
+\subsection{构建与单元测试}
+
+代码使用 MinGW C++17 构建。Makefile 已加入 \texttt{nonsmooth.cpp}、头文件自动依赖和 Windows 兼容的 build 目录规则。执行
+\begin{lstlisting}[language={}]
+D:\MingGW\ucrt64\bin\mingw32-make.exe -j4 test all
+\end{lstlisting}
+时，DCT 往返、WA 数值梯度、精确 HPWL 引脚偏移、固定节点零梯度、并列极值均分以及含固定宏的合法化测试均通过，编译未出现警告。
+
+\subsection{adaptec1 数值实验}
+
+表~\ref{tab:results} 汇总已有平滑基线与本次迁移实验。64\(\times\)64 结果用于低成本功能和策略消融；512\(\times\)512 结果是此前验证的平滑论文网格结果。不同网格之间不能作为严格算法优劣对照。
+
+\begin{table}[htbp]
+\centering
+\small
+\caption{adaptec1 的全局布局与合法化结果。M 表示百万。}
+\label{tab:results}
+\begin{tabularx}{\textwidth}{@{}Xrrrrl@{}}
+\toprule
+方法与配置 & 网格/步数 & GP HPWL & overflow & 合法 HPWL & 验收 \\
+\midrule
+WA + BB--Nesterov（低分辨率基线） & 64/600 & 73.464M & 6.918\% & 95.910M & 内部合法 \\
+Exact + Adam，旧 \(\eta_{\max}=10^6\) & 64/800 & 82.566M & 13.315\% & 118.066M & 内部合法，未达阈值 \\
+Exact + Adam + DREAMPlace lambda & 64/800 & 90.069M & 6.952\% & 114.017M & legal2: 0/0/0/0 \\
+Exact + Adam + trajectory + 4-cut bundle & 64/800 & 95.187M & 6.824\% & 118.153M & 内部合法 \\
+WA + BB--Nesterov（论文网格） & 512/600 & 71.236M & 6.965\% & 74.819M & legal2: 0/0/0/0 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+Exact + Adam 的正式低分辨率运行从约 99.7\% overflow 开始，在第 521 步首次留下本次最优可行 checkpoint；其物理 lambda 由 \(4.63\times10^{-10}\) 的基准尺度增长到足以展开密度的范围。官方检查输出为
+\begin{center}
+\texttt{Type 0/1/2/3 = 0/0/0/0}.
+\end{center}
+因此“迁移后的全局布局能够接入并通过现有合法化”已经得到端到端证据。
+
+结果同时表明，功能正确不等于质量已经追平 DREAMPlace。Exact + Adam 在进入可行域前需要更强的电场推动，预合法化 HPWL 已升到 90.069M；离散行放置又把它提高到 118.233M，Abacus 后为 118.876M，三遍合法相邻重排降低到 114.017M。trajectory + bundle 虽把 overflow 降到 6.824\%，但其可行 checkpoint 与最终合法 HPWL 都更差，说明当前历史 HPWL 方向没有抵消 Adam 与快速变化密度场之间的冲突。
+
+\section{局限性与改进方向}
+
+本次工作完成的是方法迁移和链路验证，而不是非光滑模式的最终调参。主要局限如下。
+
+\begin{enumerate}
+  \item 正式非光滑实验采用 64\(\times\)64 网格，仅证明收敛、接口和合法性；尚未执行 adaptec1 的 512\(\times\)512 全量质量实验，也没有扩展到 adaptec2。
+  \item Adam 对坐标方向进行二阶矩归一化，密度梯度成为主导后可能把不同物理幅值的单元推成近似同尺度步长。更有希望的方案是早期 Adam 展开、overflow 低于 12\% 后切换 AMSGrad 或小步长 AdaGrad，并在可行域进一步减小 step fraction。
+  \item 当前 bundle 只有切平面聚合，没有 predicted/actual decrease、serious/null step、proximal 半径自适应和受支配 cut 删除。应先补齐接受机制，再判断 bundle 是否有效，而不是继续只调混合系数。
+  \item checkpoint 仅按预合法化 HPWL 选择。非光滑布局的局部次序可能导致合法化位移差异，建议保留 5--10 个 overflow 约束下的 Pareto 候选，分别合法化后按最终合法 HPWL 决策。
+  \item 当前电场用 DCT 势函数加有限差分，而上游 DREAMPlace 使用更完整的混合正弦/余弦谱梯度；详细布局也少于上游 K-Reorder、independent-set matching 和 global swap。两者都是合法 HPWL 仍有差距的来源。
+\end{enumerate}
+
+下一轮实验应保持“绝不平滑 HPWL”，按单变量消融依次测试：512 网格下的 Exact + Adam 基准；overflow 12\% 处切换 AMSGrad/AdaGrad；可行域中的学习率缩小；多 checkpoint 合法化选择。只有在这些基准建立后，完整 proximal bundle 的收益才可被可靠判断。
+
+\section{复现方式}
+
+默认平滑调用不变：
+\begin{lstlisting}[language={}]
+.\dreamplace_cpp.exe ..\alg-electronic\ispd2005\adaptec1\adaptec1
+\end{lstlisting}
+
+本报告的主非光滑配置为：
+\begin{lstlisting}[language={}]
+.\dreamplace_cpp.exe ..\alg-electronic\ispd2005\adaptec1\adaptec1 `
+  --exact-hpwl --optimizer adam --lambda-policy dreamplace `
+  --bins 64 --iterations 800 --log-every 100 `
+  --output output\migration_adaptec1_exact_adam_800_v2
+\end{lstlisting}
+
+trajectory + bundle 配置为：
+\begin{lstlisting}[language={}]
+.\dreamplace_cpp.exe ..\alg-electronic\ispd2005\adaptec1\adaptec1 `
+  --exact-hpwl --optimizer adam --lambda-policy trajectory `
+  --lambda-interval 25 --trajectory-horizon 550 `
+  --bundle-hpwl --bundle-size 4 --bundle-interval 5 `
+  --bundle-start-overflow 0.12 --bins 64 --iterations 800
+\end{lstlisting}
+
+官方合法性检查使用原始 nodes、原始 pl、最终 pl 和 scl，row window 取 10。运行产生的 \texttt{global\_metrics.csv}、\texttt{global.pl}、\texttt{final.pl}、\texttt{summary.txt} 与 \texttt{legal2-summary.txt} 均保存在对应输出目录中。
+
+\section{结论}
+
+本次迁移在不平滑 HPWL、不中断原默认调用的前提下，建立了精确 HPWL 次梯度、四类非光滑优化器、三类无量纲 lambda 控制器和 HPWL-only bundle 方向，并与原静电密度、checkpoint 和合法化流程完成了端到端连接。adaptec1 的 800 步实验进入了 7\% overflow 可行域，最终结果通过官方四类合法性检查，说明方法迁移和合法化接口成立。
+
+然而，当前非光滑模式的最终合法 HPWL 仍显著落后平滑基线，且本次 bundle 消融没有带来改善。最可信的后续方向不是恢复平滑 HPWL，也不是继续无约束地增大 lambda，而是对非光滑目标设计阶段化优化器与步长、补全 proximal bundle 接受机制，并将合法化后的 HPWL 纳入 checkpoint 选择。
+
+\begin{thebibliography}{9}
+\bibitem{dreamplace}
+J.~Gu, Z.~G. Jiang, Y.~Lin, and D.~Z. Pan,
+``DREAMPlace: Deep Learning Toolkit-Enabled GPU Acceleration for Modern VLSI Placement,''
+\emph{Proceedings of the 56th ACM/IEEE Design Automation Conference}, 2019.
+
+\bibitem{replace}
+C.-K. Cheng, A.~B. Kahng, I.~Kang, and L.~Wang,
+``RePlAce: Advancing Solution Quality and Routability Validation in Global Placement,''
+\emph{IEEE Transactions on Computer-Aided Design of Integrated Circuits and Systems}, 2019.
+
+\bibitem{abacus}
+P.~Spindler, U.~Schlichtmann, and F.~M. Johannes,
+``Abacus: Fast Legalization of Standard Cell Circuits with Minimal Movement,''
+\emph{Proceedings of the International Symposium on Physical Design}, 2008.
+
+\bibitem{github}
+Y.~Lin et al., \emph{DREAMPlace Source Repository}.
+\url{https://github.com/limbo018/DREAMPlace}.
+\end{thebibliography}
+
+\end{document}
