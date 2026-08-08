@@ -1,0 +1,286 @@
+\documentclass[11pt,a4paper]{ctexart}
+\usepackage[margin=2.25cm]{geometry}
+\usepackage{amsmath,amssymb,booktabs,array,longtable}
+\usepackage{graphicx,float,xcolor}
+\usepackage{hyperref}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+\hypersetup{colorlinks=true,linkcolor=blue!55!black,urlcolor=blue!55!black}
+\setlength{\parindent}{2em}
+\setlength{\parskip}{0.25em}
+\setlength{\emergencystretch}{2em}
+
+\newcommand{\hpwl}{\operatorname{HPWL}}
+\newcommand{\ov}{\operatorname{overflow}}
+\newcommand{\code}[1]{\texttt{\detokenize{#1}}}
+
+\title{精确非光滑 HPWL 布局器的合法化感知扩展\\实现、消融与回退设计}
+\author{HUAWEI\_EDA / DREAMPlace C++ 技术报告}
+\date{2026 年 8 月 7 日}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本报告在独立 C++17 布局器中实现并验证一组合法化感知和非光滑优化扩展。全局目标始终使用带 pin offset 的\textbf{精确非光滑 HPWL}与静电密度能量；本轮没有引入 weighted-average、log-sum-exp 或其他平滑 HPWL 代理。新增功能包括：混合谱电场、分层密度网格、精确次梯度采样、serious/null-step bundle 试验、快速合法化 checkpoint 选择、后期合法投影与 row-proximity 力，以及多轮合法详细布局、长距离 cell insertion、合法域投影次梯度、跨行重合法化、Hungarian independent-set matching 和逐算子事务回滚。所有开关默认关闭，因此旧命令和默认行为保持不变；关闭新开关即可回退。
+
+在固定的 adaptec1、512$\times$512、800 步全局 checkpoint（85.401011M/6.9578\%）上，原 DREAMPlace-style 详细布局得到 91.029817M。三轮详细布局得到 90.922357M，Hungarian 单轮得到 91.001770M，所有增强组合得到 \textbf{90.747230M}；ISPD2005 \code{legal2.pl} 的 Type 0/1/2/3 均为 0。修正后的全局综合实验在第 600 步选择 85.777324M/6.7829\%，增强合法化后为 91.349732M。该结果完全合法但没有超过固定 checkpoint 的 90.747230M，说明当前最稳定的收益来自合法详细布局，而多层网格、serious/null bundle 和合法投影的联合控制仍需继续校准。
+\end{abstract}
+
+\section{目标、范围与兼容性}
+
+精确全局目标写为
+\begin{equation}
+  F(x,y;\lambda)=H(x,y)+\lambda E_\rho(x,y),
+\end{equation}
+其中
+\begin{equation}
+  H(x,y)=\sum_e w_e\left(
+  \max_{i\in e}p_i^x-\min_{i\in e}p_i^x+
+  \max_{i\in e}p_i^y-\min_{i\in e}p_i^y\right).
+\end{equation}
+$p_i$ 包含 pin offset。并列极值 pin 的次梯度在并列集合中均分；HPWL 报告值始终统计全部网络。静电项仍由网格电荷、Poisson 方程和电场回收得到。实现没有修改原始数据入口，不读取 ePlace、NSP 或其他外部 placement checkpoint。
+
+本轮修改遵循两层兼容策略。第一，现有参数、输出文件名和主程序调用顺序不变。第二，所有实验方法均由显式 CLI 开关启用，默认值保持旧路径。因而最直接的回退方式是删除新增参数；源代码无需切换分支，也不要求迁移数据格式。
+
+\begin{table}[H]
+\centering
+\small
+\caption{主要实现位置。}
+\begin{tabular}{p{0.26\textwidth}p{0.64\textwidth}}
+\toprule
+文件 & 责任\\
+\midrule
+\code{src/optimizer.h} & 全局布局实验配置、默认关闭的兼容开关\\
+\code{src/electric.cpp}, \code{src/spectral.cpp} & DCT Poisson、电场重构和 mixed-spectral 路径\\
+\code{src/nonsmooth.cpp} & 精确 HPWL、lambda、bundle、多层网格、合法感知 checkpoint 与投影\\
+\code{src/legalizer.cpp} & Greedy/Abacus、详细布局增强、事务回滚和完整合法性检查\\
+\code{src/main.cpp} & 保持旧入口并解析新增 CLI 参数\\
+\code{tests/core_test.cpp} & 谱基函数、合法化代理、Hungarian 与增强详细布局回归\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{全局布局扩展}
+
+\subsection{混合谱电场}
+
+原路径用 DCT 求电势，再对空间电势做中心有限差分得到电场。新增的混合谱路径保留 DCT Poisson 求解，但在频域直接乘以 $-k_x$ 或 $-k_y$，并分别通过 sine/cosine 混合基逆变换重构 $E_x,E_y$。实现利用现有 IDCT 合成 sine basis，没有增加外部 FFT 依赖。该路径减少了有限差分的网格截断误差，但会改变密度梯度范数，因此重新按梯度范数标定 $\lambda_0$。
+
+120 步探针没有发现符号错误或非有限值；mixed-spectral 的 overflow 为 96.8499\%，固定有限差分为 96.7974\%。短程结果略差，因此综合 800 步实验保留有限差分场。该结论仅说明当前标定下没有短程优势，不说明谱梯度理论上无效。
+
+\subsection{分层密度网格}
+
+\code{--multilevel-density} 从不低于 \code{--multilevel-min-bins} 的二次幂网格开始，每次把两个方向的 bin 数加倍，直到用户请求的目标网格。网格切换条件同时使用 overflow 阈值和预算上限：若阈值迟迟未满足，也会在均分预算节点强制推进，保证最终阶段一定运行在目标分辨率。
+
+第一次实现只重建电场并把 lambda control 重置为 1。512 网格在第 790 步才启用，切换后 overflow 反弹；更严重的是，程序用旧网格的最小 overflow checkpoint 与新网格比较，最终日志中的 15.20\% 与 512 网格重算的 38.79\% 不一致。修正版执行四项状态迁移：保留切换前有效 $\lambda=\lambda_0\eta$，用新梯度范数计算 $\lambda_0$ 后恢复 $\eta$；清空 Adam/bundle 的网格相关历史；用 25 步从 0.1 线性恢复到 1.0 的步长冷启动；清空旧网格 checkpoint 排名。120 步的 $16\to32\to64$ 验证在第 40、80 步切换，最终 64 网格 overflow 为 96.1374\%，指标口径一致。
+
+\subsection{精确 HPWL 次梯度采样}
+
+\code{--gradient-samples S} 在给定间隔内，以当前坐标为中心生成 $S$ 个小扰动点，逐点计算精确 HPWL 次梯度，并与当前次梯度平均。该方法没有改变 $H(x)$，只是在 Clarke 次微分附近减少极值 pin active set 切换造成的方向翻转。120 步、每 20 步采两个样本的结果为 44.169304M/96.7955\%，固定路径为 44.165584M/96.7974\%；差异很小，额外目标计算没有在短程中形成明确收益。
+
+\subsection{serious/null-step bundle}
+
+HPWL cut 仍为
+\begin{equation}
+  m_j(x)=H(x_j)+g_j^\top(x-x_j),\qquad g_j\in\partial H(x_j),
+\end{equation}
+密度项不进入历史 bundle，因为 $\lambda$ 和密度网格会变化。新增 \code{--serious-bundle} 对 trial step 比较实际下降与一阶预测下降。未可行时使用当前加权目标
+\begin{equation}
+  \Delta_{\mathrm{act}}=
+  [H(x_k)+\lambda E_\rho(x_k)]-
+  [H(x_t)+\lambda E_\rho(x_t)],
+\end{equation}
+并允许单步 overflow 在 0.2 个百分点的信赖带内波动；已可行时只接受仍满足 $\ov\le7\%$ 且真实降低精确 HPWL 的候选。serious step 扩大 proximal/trial 半径，null step 加入 trial cut、回滚坐标、清空自适应矩并减半下一步 trial scale。
+
+强制从中心状态早启是一个负结果：第一版连续 60 个 null step，完全冻结。加入 trial 缩放和加权 merit 后，40 步探针出现 serious/null 交替，但 overflow 仍约 99.69\%。因此默认仍只在 \code{bundle-start-overflow=0.12} 以下启用。修正的 800 步实验在第 503 步开始 bundle，第 562 步进入可行域；后段反复收缩到最小 trial scale，表明模型预测与精确函数下降仍有系统偏差。当前实现应称为 serious/null 试验层，而不是严格完整的 proximal bundle 求解器。
+
+\subsection{合法化感知 checkpoint、投影与 row force}
+
+合法化代理包含平均 row distance 和 segment demand overflow。\code{--legal-checkpoints} 周期性复制当前数据库，执行快速 Greedy、Abacus 和一轮相邻重排，用快速合法 HPWL 对可行 checkpoint 排名。最终恢复对应的\emph{原始全局坐标}，再运行完整详细布局，避免把快速合法解直接当成最终解。
+
+\code{--late-legal-projection} 把全局坐标向快速合法坐标混合；\code{--legal-row-force} 在低 overflow 阶段给精确 HPWL 的纵向次梯度加入弱 row-proximity 力。投影只在快速合法 HPWL 不超过 GP HPWL 的 1.08 倍时尝试。数值实验发现 2\% 投影曾把 overflow 从 6.969\% 推到 7.477\%。最终实现增加投影后的密度重算：若当前已可行，投影必须仍不超过 7\%；否则回滚全部坐标。该保护默认关闭路径不受影响。
+
+\section{合法化与详细布局扩展}
+
+\subsection{多轮框架与事务合法性}
+
+基础流程仍为 obstacle-aware row segmentation、Greedy/Tetris 和 segment 内 Abacus。新增外循环重复 adjacent reorder、K-Reorder、cell insertion、global swap、independent-set matching 和合法域投影次梯度。跨行 swap 会改变 cell 所属 segment，因而每轮开始和跨行算子后都从当前坐标重建 segment membership。
+
+开发过程中第二轮曾出现固定宏重叠。原因是 Global Swap/Independent Set 移动坐标后，下一轮 K-Reorder 使用旧 segment 归属。除重建归属外，最终实现还为每个详细布局算子保存 movable 坐标快照；算子结束后立即检查边界、row/site 对齐、movable overlap 和 fixed overlap。任一检查失败只回滚该算子，而不是保留非法结果或中止整个可用布局。正常合法路径的坐标和 HPWL 不变。
+
+\subsection{Cell insertion}
+
+K-Reorder 只枚举小窗口排列。Cell insertion 根据 incident nets 的 bbox 中心估计目标横坐标，把一个 cell 在同一 segment 内最多移动给定的秩距离，保留窗口总宽度和原 gap 序列，并用受影响网络的精确 HPWL 决定是否接受。固定 checkpoint 上一轮、窗口 16 将 91.029817M 降到 91.008134M。
+
+\subsection{合法域投影次梯度}
+
+先对当前合法布局计算精确 HPWL 次梯度，再产生横向 desired coordinate，随后逐 segment 调用 Abacus 作为离散可行域投影。只有完整合法且全局 HPWL 严格下降才接受，否则恢复坐标并减半 site step。单独两次投影在固定 checkpoint 上均被拒绝，结果保持 91.029817M；在组合配置中，投影因前序布局不同而获得小幅下降。
+
+\subsection{跨行重合法化}
+
+该策略由网络目标的纵向分量产生相邻行 desired coordinate，然后在候选数据库上重新执行 Greedy+Abacus。固定 checkpoint 的候选从 91.934M 恶化到约 96.995M，因而被严格拒绝。该负结果说明全局重合法化破坏横向次序的代价大于相邻行收益，后续若继续应改为局部窗口和容量增量更新。
+
+\subsection{Hungarian independent-set matching}
+
+Independent set 仍只包含等尺寸且互不共享网络的 cell，因此 cell-to-slot 代价可加。原小集合枚举扩展为 Hungarian 最小费用分配，集合规模可提高到 32；候选应用后仍用受影响网络的精确 HPWL 复核。规模 8 的单轮结果为 91.001770M，优于原规模 4 的 91.029817M。
+
+\section{数值实验}
+
+\subsection{固定全局 checkpoint 的详细布局消融}
+
+所有行使用同一 \code{global.pl}：精确 HPWL 85.401011M，512$\times$512 overflow 6.9578\%。因此表中差异只来自合法化和详细布局。
+
+\begin{table}[H]
+\centering
+\caption{adaptec1 固定 checkpoint 消融，HPWL 单位 M。}
+\label{tab:legal-ablation}
+\begin{tabular}{lrr}
+\toprule
+配置 & 合法 HPWL & 相对 91.029817M\\
+\midrule
+原 DREAMPlace-style 详细布局 & 91.029817 & 0\\
+Cell insertion（1 轮，window 16） & 91.008134 & $-0.021683$\\
+合法域投影次梯度（2 轮） & 91.029817 & 0\\
+Hungarian independent set（size 8） & 91.001770 & $-0.028047$\\
+三轮原详细布局 & 90.922357 & $-0.107460$\\
+全部增强组合 & \textbf{90.747230} & $\mathbf{-0.282587}$\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+全部增强组合包括三轮外循环、cell insertion、size-8 Hungarian matching、两轮合法投影次梯度和一次跨行候选试验。跨行候选被拒绝。内部 checker 和 ISPD2005 \code{legal2.pl} 均确认完全合法；官方 Type 0/1/2/3 为 0/0/0/0。
+
+\subsection{120 步全局探针}
+
+这些运行用于验证数值方向和状态切换，不用于比较最终合法质量，因为 overflow 仍高于 96\%。
+
+\begin{table}[H]
+\centering
+\caption{64$\times$64、120 步精确 HPWL 探针。}
+\begin{tabular}{lrrr}
+\toprule
+配置 & GP HPWL (M) & Overflow & GP 秒\\
+\midrule
+固定有限差分 & 44.165584 & 96.7974\% & 28.1\\
+Mixed-spectral field & 44.170221 & 96.8499\% & 28.8\\
+每 20 步两个次梯度样本 & 44.169304 & 96.7955\% & 30.5\\
+修正后 $16\to32\to64$ 多层网格 & 44.768383 & 96.1374\% & 28.5\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+多层网格用更高的 HPWL 换取约 0.66 个百分点的 overflow 改善；mixed-spectral 和采样差异均很小。只有单 seed、短预算，不能据此声称统计优势。
+
+\subsection{800 步综合实验}
+
+第一次综合实验在旧多层切换逻辑下没有得到 7\% 可行点，最终按 512 网格重算为 79.261080M/38.7901\%，合法 HPWL 87.337421M。较低合法 HPWL 来自远高于目标的 overflow，不能与可行基线比较。
+
+修正后实验从 128 网格开始，按预算推进到 256 和 512 网格；第 503 步开始 serious/null bundle，第 562 步进入 7\% 可行域。快速合法 checkpoint 在第 600 步给出 91.974165M，最终恢复其全局坐标 85.777324M/6.7829\%，再运行完整增强详细布局得到 91.349732M。
+
+\begin{table}[H]
+\centering
+\caption{800 步可行结果对比，HPWL 单位 M。}
+\begin{tabular}{lrrr}
+\toprule
+配置 & GP HPWL & Overflow & 合法 HPWL\\
+\midrule
+原 512 bundle+refine & 85.401011 & 6.9578\% & 91.029817\\
+原 GP + 本报告增强合法化 & 85.401011 & 6.9578\% & \textbf{90.747230}\\
+修正后全局综合配置 & 85.777324 & 6.7829\% & 91.349732\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+综合全局配置比原合法基线差 0.319915M，比固定 GP 上的增强合法化差 0.602502M。主要原因是多层切换改变了轨迹，后段 serious/null 经常把 trial scale 压到 0.01；同时合法投影和 lambda 窄带反馈发生耦合。当前结果支持保留这些机制为可选实验层，但不支持把它们设为默认。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=0.94\textwidth,height=7.0cm,
+  xlabel={迭代},ylabel={精确 HPWL (M)},
+  xmin=0,xmax=800,grid=major,
+  legend style={font=\small,at={(0.5,-0.18)},anchor=north,legend columns=2}]
+\addplot[black,thick] table[x=iteration,y expr=\thisrow{exact_hpwl}/1000000,col sep=comma]
+  {../output/exact_adam_512_800_refine_bundle_dp/global_metrics.csv};
+\addlegendentry{原 512 bundle+refine}
+\addplot[red,thick] table[x=iteration,y expr=\thisrow{exact_hpwl}/1000000,col sep=comma]
+  {../output/enhanced_all_512_800_v2/global_metrics.csv};
+\addlegendentry{综合配置 v2}
+\end{axis}
+\end{tikzpicture}
+\caption{两组 800 步轨迹的精确非光滑 HPWL。综合配置在网格切换处发生明显阶段变化。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+  width=0.94\textwidth,height=7.0cm,
+  xlabel={迭代},ylabel={Overflow (\%)},
+  xmin=0,xmax=800,ymin=0,ymax=105,grid=major,
+  legend style={font=\small,at={(0.5,-0.18)},anchor=north,legend columns=2}]
+\addplot[black,thick] table[x=iteration,y expr=100*\thisrow{overflow},col sep=comma]
+  {../output/exact_adam_512_800_refine_bundle_dp/global_metrics.csv};
+\addlegendentry{原 512 bundle+refine}
+\addplot[blue,thick] table[x=iteration,y expr=100*\thisrow{overflow},col sep=comma]
+  {../output/enhanced_all_512_800_v2/global_metrics.csv};
+\addlegendentry{综合配置 v2}
+\addplot[dashed,gray] coordinates {(0,7) (800,7)};
+\addlegendentry{7\% 阈值}
+\end{axis}
+\end{tikzpicture}
+\caption{Overflow 轨迹。综合配置在目标 512 网格上于第 562 步首次进入可行域。}
+\end{figure}
+
+\section{调用、回退与复现}
+
+旧调用方式不变。例如下列命令仍进入原 weighted-average + BB--Nesterov 默认路径：
+\begin{verbatim}
+.\dreamplace_cpp.exe ..\alg-electronic\ispd2005\adaptec1\adaptec1
+\end{verbatim}
+
+固定 checkpoint 的最佳增强合法化参数为：
+\begin{verbatim}
+--dreamplace-detailed --legal-refine-rounds 3
+--cell-insertion-passes 1 --cell-insertion-window 16
+--legal-projected-passes 2 --legal-projected-step-sites 4
+--row-relegalization-passes 1
+--independent-set-size 8 --hungarian-matching
+\end{verbatim}
+
+全局实验开关为：
+\begin{verbatim}
+--mixed-spectral-field
+--multilevel-density --multilevel-min-bins 128
+--gradient-samples 2 --gradient-sampling-interval 50
+--gradient-sampling-radius 2
+--serious-bundle --serious-step-ratio 0.1
+--legal-checkpoints --legal-checkpoint-interval 50
+--late-legal-projection --legal-projection-interval 50
+--legal-projection-mix 0.02 --legal-row-force 0.01
+\end{verbatim}
+
+所有这些参数都是 opt-in。删除对应参数即可逐项消融；删除全部新增参数即可回到原命令行为。实验输出独立写入 \code{output/} 子目录，不覆盖原基线。构建和测试命令为：
+\begin{verbatim}
+D:\MingGW\ucrt64\bin\mingw32-make.exe -j4 test all
+\end{verbatim}
+
+\section{限制与后续建议}
+
+第一，当前 serious/null 实现对模型预测误差较敏感，后段大量 null step 说明需要独立的约束 bundle 子问题，而不是只在 Adam trial 外包一层接受判据。第二，多层网格已修复状态迁移和 checkpoint 口径，但只有 adaptec1 单 seed 的完整实验；切换时机需要跨数据集验证。第三，mixed-spectral 电场只完成数值基函数和短程验证，尚未重新搜索其专用 lambda/步长。第四，快速合法化排名与完整增强合法化的排序不完全一致；第 600 步快速值为 91.974M，而完整值为 91.350M，代理仍有偏差。第五，当前 row relegalization 是全局重排，局部窗口化可能更合适。
+
+建议下一轮按以下优先级推进：先把本报告的增强详细布局作为稳定后处理；在 6.5\%--7\% 的多个 checkpoint 上运行完整而不是快速合法化，直接选择最终合法 HPWL；将 serious/null 子问题改为“HPWL bundle + 当前密度约束”的显式小规模二次子问题；最后分别为 finite-difference 与 mixed-spectral 场校准 $\lambda_0$ 和切网格冷启动长度。当前证据不支持默认启用综合全局配置，但支持默认之外保留全部实验接口。
+
+\section{材料来源说明}
+
+实现与术语对照使用项目本地的 DREAMPlace 论文
+\code{reference/DREAMPlace Deep Learning Toolkit-Enabled GPU Acceleration for Modern VLSI Placement.pdf}
+以及用户指定的公开仓库 \url{https://github.com/limbo018/DREAMPlace}。本报告不声称 CPU 实现是上游 CUDA 内核的逐行复刻，也没有添加未经核验的文献条目。
+
+\section{结论}
+
+本轮完成了此前建议技术的可切换实现、回归测试和 adaptec1 数值消融。最明确的正结果是合法详细布局：同一全局 checkpoint 的合法 HPWL 从 91.029817M 降到 90.747230M，改善 0.282587M，官方 checker 四类错误均为零。全局综合路径在修复多层网格状态迁移后能够达到 6.7829\% overflow，但最终合法 HPWL 为 91.349732M，没有超过原基线。由此应把新增全局方法视为研究接口，把多轮 insertion/Hungarian/合法投影详细布局视为当前可直接复用的结果。
+
+\end{document}

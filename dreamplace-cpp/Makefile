@@ -3,7 +3,7 @@ CXXFLAGS := -std=c++17 -O3 -march=native -fopenmp -Wall -Wextra -Wpedantic -MMD 
 LDFLAGS := -fopenmp -static-libgcc -static-libstdc++
 
 BUILD := build
-CORE_SRC := src/bookshelf.cpp src/wirelength.cpp src/spectral.cpp src/electric.cpp
+CORE_SRC := src/bookshelf.cpp src/wirelength.cpp src/spectral.cpp src/electric.cpp src/obstacle.cpp
 CORE_OBJ := $(CORE_SRC:src/%.cpp=$(BUILD)/%.o)
 
 .PHONY: all clean test

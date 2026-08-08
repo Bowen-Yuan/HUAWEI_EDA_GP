@@ -116,4 +116,45 @@ void idct2_orthonormal(std::vector<Real>& values, int nx, int ny) {
     }
 }
 
+namespace {
+
+// Synthesize the sine basis sin((sample + 1/2) k pi / n), k=1..n-1,
+// through the existing orthonormal DCT-III implementation.  The identity
+// sin((i+1/2)k*pi/n)=(-1)^i cos((i+1/2)(n-k)*pi/n) avoids a second FFT kernel.
+void inverse_sine_orthonormal(std::vector<Real>& values) {
+    const int n = static_cast<int>(values.size());
+    std::vector<Real> reversed(n, 0.0);
+    for (int k = 1; k < n; ++k) reversed[n - k] = values[k];
+    idct_orthonormal(reversed);
+    for (int i = 0; i < n; ++i) values[i] = (i & 1) ? -reversed[i] : reversed[i];
+}
+
+}  // namespace
+
+void inverse_mixed_sine_cosine2(std::vector<Real>& values, int nx, int ny,
+                                bool sine_x) {
+    if (static_cast<int>(values.size()) != nx * ny)
+        throw std::runtime_error("mixed inverse transform shape mismatch");
+    #pragma omp parallel
+    {
+        std::vector<Real> line(std::max(nx, ny));
+        #pragma omp for schedule(static)
+        for (int y = 0; y < ny; ++y) {
+            line.resize(nx);
+            for (int x = 0; x < nx; ++x) line[x] = values[y * nx + x];
+            if (sine_x) inverse_sine_orthonormal(line);
+            else idct_orthonormal(line);
+            for (int x = 0; x < nx; ++x) values[y * nx + x] = line[x];
+        }
+        #pragma omp for schedule(static)
+        for (int x = 0; x < nx; ++x) {
+            line.resize(ny);
+            for (int y = 0; y < ny; ++y) line[y] = values[y * nx + x];
+            if (sine_x) idct_orthonormal(line);
+            else inverse_sine_orthonormal(line);
+            for (int y = 0; y < ny; ++y) values[y * nx + x] = line[y];
+        }
+    }
+}
+
 }  // namespace dpcpp

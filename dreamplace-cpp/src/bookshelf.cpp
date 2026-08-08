@@ -210,6 +210,51 @@ Database read_bookshelf(const std::string& benchmark_base) {
     return db;
 }
 
+void load_movable_placement(Database& db, const std::string& path) {
+    namespace fs = std::filesystem;
+    const fs::path pl_path = fs::absolute(path).lexically_normal();
+    reject_forbidden_placement(pl_path);
+    if (!fs::is_regular_file(pl_path)) {
+        throw std::runtime_error("missing warm-start placement: " + pl_path.string());
+    }
+
+    std::ifstream input(pl_path);
+    if (!input) throw std::runtime_error("cannot read " + pl_path.string());
+    std::vector<unsigned char> seen(db.nodes.size(), 0);
+    std::string line;
+    while (std::getline(input, line)) {
+        const auto fields = split(line);
+        if (fields.size() < 3 || fields[0] == "UCLA" ||
+            (!fields[0].empty() && fields[0][0] == '#')) continue;
+        const auto found = db.node_by_name.find(fields[0]);
+        if (found == db.node_by_name.end()) continue;
+        Node& node = db.nodes[found->second];
+        if (node.fixed) continue;
+        const Real x = std::stod(fields[1]) + 0.5 * node.width;
+        const Real y = std::stod(fields[2]) + 0.5 * node.height;
+        if (!std::isfinite(x) || !std::isfinite(y) ||
+            x < db.xl + 0.5 * node.width || x > db.xh - 0.5 * node.width ||
+            y < db.yl + 0.5 * node.height || y > db.yh - 0.5 * node.height) {
+            throw std::runtime_error("warm-start node outside placement region: " + node.name);
+        }
+        node.x = x;
+        node.y = y;
+        const auto colon = std::find(fields.begin(), fields.end(), ":");
+        if (colon != fields.end() && colon + 1 != fields.end()) {
+            node.orientation = *(colon + 1);
+        }
+        seen[node.id] = 1;
+    }
+    for (int id : db.movable_ids) {
+        if (!seen[id]) {
+            throw std::runtime_error("movable node missing from warm-start PL: " +
+                                     db.nodes[id].name);
+        }
+    }
+    std::cout << "[Init] movable warm start=" << pl_path.string()
+              << " nodes=" << db.movable_ids.size() << '\n';
+}
+
 void center_gaussian_initialize(Database& db, std::uint64_t seed,
                                 Real sigma_ratio) {
     std::mt19937_64 generator(seed);

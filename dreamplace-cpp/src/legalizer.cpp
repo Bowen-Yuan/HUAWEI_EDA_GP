@@ -134,6 +134,50 @@ int nearest_row(const Database& db, Real target_bottom) {
     return std::max(0, index);
 }
 
+std::vector<Segment> rebuild_segment_cells(const Database& db) {
+    std::vector<Segment> segments = build_segments(db);
+    std::vector<std::vector<int>> by_row(db.rows.size());
+    for (int s = 0; s < static_cast<int>(segments.size()); ++s)
+        by_row[segments[s].row].push_back(s);
+    for (int id : db.movable_ids) {
+        const Node& node = db.nodes[id];
+        const int row_index = nearest_row(db, node.y - 0.5 * node.height);
+        const Real left = node.x - 0.5 * node.width;
+        const Real right = node.x + 0.5 * node.width;
+        int owner = -1;
+        for (int s : by_row[row_index]) {
+            if (left >= segments[s].lo - 1.0e-6 &&
+                right <= segments[s].hi + 1.0e-6) {
+                owner = s;
+                break;
+            }
+        }
+        if (owner < 0)
+            throw std::runtime_error("legal cell has no obstacle-free segment: " + node.name);
+        segments[owner].cells.push_back(id);
+    }
+    return segments;
+}
+
+using MovableCoordinates = std::vector<std::pair<Real, Real>>;
+
+MovableCoordinates save_movable_coordinates(const Database& db) {
+    MovableCoordinates coordinates;
+    coordinates.reserve(db.movable_ids.size());
+    for (int id : db.movable_ids)
+        coordinates.emplace_back(db.nodes[id].x, db.nodes[id].y);
+    return coordinates;
+}
+
+void restore_movable_coordinates(Database& db,
+                                 const MovableCoordinates& coordinates) {
+    for (int i = 0; i < static_cast<int>(db.movable_ids.size()); ++i) {
+        Node& node = db.nodes[db.movable_ids[i]];
+        node.x = coordinates[i].first;
+        node.y = coordinates[i].second;
+    }
+}
+
 void greedy_legalize(Database& db, const std::vector<Desired>& desired,
                      std::vector<Segment>& segments, int row_search_limit) {
     std::vector<std::vector<int>> segments_by_row(db.rows.size());
@@ -506,7 +550,56 @@ bool disjoint_nets(const std::vector<int>& nets,
     return true;
 }
 
-std::size_t independent_set_matching(Database& db, int maximum_size) {
+std::vector<int> minimum_cost_assignment(
+    const std::vector<std::vector<Real>>& cost) {
+    const int n = static_cast<int>(cost.size());
+    std::vector<Real> u(n + 1, 0.0), v(n + 1, 0.0);
+    std::vector<int> p(n + 1, 0), way(n + 1, 0);
+    for (int i = 1; i <= n; ++i) {
+        p[0] = i;
+        int j0 = 0;
+        std::vector<Real> minv(n + 1, std::numeric_limits<Real>::infinity());
+        std::vector<char> used(n + 1, false);
+        do {
+            used[j0] = true;
+            const int i0 = p[j0];
+            Real delta = std::numeric_limits<Real>::infinity();
+            int j1 = 0;
+            for (int j = 1; j <= n; ++j) {
+                if (used[j]) continue;
+                const Real current = cost[i0 - 1][j - 1] - u[i0] - v[j];
+                if (current < minv[j]) {
+                    minv[j] = current;
+                    way[j] = j0;
+                }
+                if (minv[j] < delta) {
+                    delta = minv[j];
+                    j1 = j;
+                }
+            }
+            for (int j = 0; j <= n; ++j) {
+                if (used[j]) {
+                    u[p[j]] += delta;
+                    v[j] -= delta;
+                } else {
+                    minv[j] -= delta;
+                }
+            }
+            j0 = j1;
+        } while (p[j0] != 0);
+        do {
+            const int j1 = way[j0];
+            p[j0] = p[j1];
+            j0 = j1;
+        } while (j0 != 0);
+    }
+    std::vector<int> assignment(n, 0);
+    for (int j = 1; j <= n; ++j) assignment[p[j] - 1] = j - 1;
+    return assignment;
+}
+
+std::size_t independent_set_matching(Database& db, int maximum_size,
+                                     bool use_hungarian) {
     const std::vector<std::vector<int>> incident = build_incident_nets(db);
     auto groups = equal_size_groups(db);
     std::size_t accepted = 0;
@@ -541,22 +634,37 @@ std::size_t independent_set_matching(Database& db, int maximum_size) {
             for (int index : indices) consumed[index] = true;
             std::vector<std::pair<Real, Real>> slots;
             for (int id : cells) slots.push_back({db.nodes[id].x, db.nodes[id].y});
-            std::vector<int> permutation(cells.size());
-            std::iota(permutation.begin(), permutation.end(), 0);
-            Real best_cost = std::numeric_limits<Real>::infinity();
-            std::vector<int> best_permutation = permutation;
-            do {
-                Real cost = 0.0;
-                for (int i = 0; i < static_cast<int>(cells.size()); ++i) {
-                    Node& node = db.nodes[cells[i]];
-                    const Real old_x = node.x, old_y = node.y;
-                    node.x = slots[permutation[i]].first;
-                    node.y = slots[permutation[i]].second;
-                    cost += affected_hpwl(db, incident[cells[i]]);
-                    node.x = old_x; node.y = old_y;
+            std::vector<std::vector<Real>> costs(
+                cells.size(), std::vector<Real>(cells.size(), 0.0));
+            for (int i = 0; i < static_cast<int>(cells.size()); ++i) {
+                Node& node = db.nodes[cells[i]];
+                const Real old_x = node.x, old_y = node.y;
+                for (int j = 0; j < static_cast<int>(slots.size()); ++j) {
+                    node.x = slots[j].first;
+                    node.y = slots[j].second;
+                    costs[i][j] = affected_hpwl(db, incident[cells[i]]);
                 }
-                if (cost < best_cost) { best_cost = cost; best_permutation = permutation; }
-            } while (std::next_permutation(permutation.begin(), permutation.end()));
+                node.x = old_x;
+                node.y = old_y;
+            }
+            std::vector<int> best_permutation;
+            if (use_hungarian || cells.size() > 6) {
+                best_permutation = minimum_cost_assignment(costs);
+            } else {
+                std::vector<int> permutation(cells.size());
+                std::iota(permutation.begin(), permutation.end(), 0);
+                Real best_cost = std::numeric_limits<Real>::infinity();
+                best_permutation = permutation;
+                do {
+                    Real cost = 0.0;
+                    for (int i = 0; i < static_cast<int>(cells.size()); ++i)
+                        cost += costs[i][permutation[i]];
+                    if (cost < best_cost) {
+                        best_cost = cost;
+                        best_permutation = permutation;
+                    }
+                } while (std::next_permutation(permutation.begin(), permutation.end()));
+            }
             const std::vector<int> nets = union_incident(incident, cells);
             const Real before = affected_hpwl(db, nets);
             for (int i = 0; i < static_cast<int>(cells.size()); ++i) {
@@ -578,11 +686,419 @@ std::size_t independent_set_matching(Database& db, int maximum_size) {
     return accepted;
 }
 
+std::size_t cell_insertion(Database& db, std::vector<Segment>& segments,
+                           int window, int passes) {
+    const std::vector<std::vector<int>> incident = build_incident_nets(db);
+    std::size_t accepted_total = 0;
+    for (int pass = 0; pass < passes; ++pass) {
+        std::size_t accepted = 0;
+        for (Segment& segment : segments) {
+            std::sort(segment.cells.begin(), segment.cells.end(), [&](int a, int b) {
+                return db.nodes[a].x < db.nodes[b].x;
+            });
+            for (int source = 0; source < static_cast<int>(segment.cells.size()); ++source) {
+                const int id = segment.cells[source];
+                const Real target = net_target(db, id, incident[id]).first;
+                auto position = std::lower_bound(
+                    segment.cells.begin(), segment.cells.end(), target,
+                    [&](int candidate, Real x) { return db.nodes[candidate].x < x; });
+                int destination = static_cast<int>(position - segment.cells.begin());
+                destination = std::clamp(destination, 0,
+                    static_cast<int>(segment.cells.size()) - 1);
+                destination = std::clamp(destination, source - window, source + window);
+                if (destination == source) continue;
+                const int begin = std::min(source, destination);
+                const int end = std::max(source, destination) + 1;
+                std::vector<int> original(segment.cells.begin() + begin,
+                                          segment.cells.begin() + end);
+                std::vector<int> candidate = original;
+                const int local_source = source - begin;
+                const int local_destination = destination - begin;
+                const int moved = candidate[local_source];
+                candidate.erase(candidate.begin() + local_source);
+                candidate.insert(candidate.begin() + local_destination, moved);
+                const Real left = db.nodes[original.front()].x -
+                                  0.5 * db.nodes[original.front()].width;
+                std::vector<Real> gaps(original.size() - 1, 0.0);
+                for (int i = 0; i + 1 < static_cast<int>(original.size()); ++i) {
+                    gaps[i] = (db.nodes[original[i + 1]].x -
+                               0.5 * db.nodes[original[i + 1]].width) -
+                              (db.nodes[original[i]].x +
+                               0.5 * db.nodes[original[i]].width);
+                }
+                const std::vector<int> nets = union_incident(incident, original);
+                const Real before = affected_hpwl(db, nets);
+                assign_window(db, candidate, left, gaps);
+                const Real after = affected_hpwl(db, nets);
+                if (after + 1.0e-9 < before) {
+                    std::copy(candidate.begin(), candidate.end(),
+                              segment.cells.begin() + begin);
+                    ++accepted;
+                } else {
+                    assign_window(db, original, left, gaps);
+                }
+            }
+        }
+        accepted_total += accepted;
+        std::cout << "[CellInsertion] pass=" << pass
+                  << " accepted=" << accepted << '\n';
+        if (accepted == 0) break;
+    }
+    return accepted_total;
+}
+
+std::size_t projected_hpwl_refine(Database& db, std::vector<Segment>& segments,
+                                  int passes, Real initial_step_sites) {
+    std::size_t accepted = 0;
+    Real step_sites = initial_step_sites;
+    for (int pass = 0; pass < passes; ++pass) {
+        std::vector<Real> gx, gy;
+        exact_hpwl_subgradient(db, 100, &gx, &gy);
+        std::vector<Desired> desired(db.nodes.size());
+        std::vector<std::pair<Real, Real>> original(db.nodes.size());
+        for (int id : db.movable_ids) {
+            original[id] = {db.nodes[id].x, db.nodes[id].y};
+            const int row_index = nearest_row(
+                db, db.nodes[id].y - 0.5 * db.nodes[id].height);
+            const Real site = db.rows[row_index].site_spacing;
+            const Real scale = step_sites * site /
+                std::max<Real>(1.0, db.node_pin_weight[id]);
+            desired[id] = {db.nodes[id].x - scale * gx[id], db.nodes[id].y};
+        }
+        const Real before = exact_hpwl(db);
+        for (Segment& segment : segments) abacus_segment(db, segment, desired);
+        const Real after = exact_hpwl(db);
+        const LegalityResult legal = check_legality(db);
+        if (legal.legal && after + 1.0e-9 < before) {
+            ++accepted;
+            std::cout << "[ProjectedHPWL] pass=" << pass
+                      << " before=" << before << " after=" << after
+                      << " step_sites=" << step_sites << '\n';
+        } else {
+            for (int id : db.movable_ids) {
+                db.nodes[id].x = original[id].first;
+                db.nodes[id].y = original[id].second;
+            }
+            step_sites *= 0.5;
+            std::cout << "[ProjectedHPWL] pass=" << pass
+                      << " rejected step_sites=" << step_sites << '\n';
+            if (step_sites < 0.25) break;
+        }
+    }
+    return accepted;
+}
+
+struct LegalBundleCut {
+    Real hpwl = 0.0;
+    std::vector<Real> x;
+    std::vector<Real> gx;
+};
+
+void append_legal_bundle_cut(const Database& db, Real hpwl,
+                             const std::vector<Real>& gx, int maximum_cuts,
+                             std::vector<LegalBundleCut>& cuts) {
+    LegalBundleCut cut;
+    cut.hpwl = hpwl;
+    cut.x.resize(db.movable_ids.size());
+    cut.gx.resize(db.movable_ids.size());
+    for (std::size_t i = 0; i < db.movable_ids.size(); ++i) {
+        const int id = db.movable_ids[i];
+        cut.x[i] = db.nodes[id].x;
+        cut.gx[i] = gx[id];
+    }
+    if (static_cast<int>(cuts.size()) >= maximum_cuts) cuts.erase(cuts.begin());
+    cuts.push_back(std::move(cut));
+}
+
+std::vector<Real> legal_bundle_direction(const Database& db,
+                                         const std::vector<LegalBundleCut>& cuts,
+                                         Real step_sites) {
+    const int count = static_cast<int>(cuts.size());
+    std::vector<Real> beta(count, 0.0), gram(count * count, 0.0);
+    std::vector<Real> metric(db.movable_ids.size(), 0.0);
+    for (std::size_t i = 0; i < db.movable_ids.size(); ++i) {
+        const int id = db.movable_ids[i];
+        const int row = nearest_row(db, db.nodes[id].y - 0.5 * db.nodes[id].height);
+        metric[i] = db.rows[row].site_spacing /
+                    std::max(1, db.node_pin_weight[id]);
+    }
+    for (int j = 0; j < count; ++j) {
+        beta[j] = cuts[j].hpwl;
+        for (std::size_t i = 0; i < db.movable_ids.size(); ++i) {
+            const int id = db.movable_ids[i];
+            beta[j] += cuts[j].gx[i] * (db.nodes[id].x - cuts[j].x[i]);
+        }
+        for (int k = 0; k <= j; ++k) {
+            Real value = 0.0;
+            for (std::size_t i = 0; i < db.movable_ids.size(); ++i)
+                value += metric[i] * cuts[j].gx[i] * cuts[k].gx[i];
+            gram[j * count + k] = gram[k * count + j] = value;
+        }
+    }
+    std::vector<Real> alpha(count, 0.0);
+    alpha.back() = 1.0;
+    for (int iteration = 0; iteration < 30; ++iteration) {
+        std::vector<Real> dual_gradient(count, 0.0);
+        int best = 0;
+        for (int j = 0; j < count; ++j) {
+            Real product = 0.0;
+            for (int k = 0; k < count; ++k)
+                product += gram[j * count + k] * alpha[k];
+            dual_gradient[j] = beta[j] - step_sites * product;
+            if (dual_gradient[j] > dual_gradient[best]) best = j;
+        }
+        std::vector<Real> direction(count, 0.0);
+        for (int j = 0; j < count; ++j) direction[j] = -alpha[j];
+        direction[best] += 1.0;
+        Real numerator = 0.0, curvature = 0.0;
+        for (int j = 0; j < count; ++j) {
+            numerator += dual_gradient[j] * direction[j];
+            for (int k = 0; k < count; ++k)
+                curvature += direction[j] * gram[j * count + k] * direction[k];
+        }
+        if (numerator <= 1.0e-7) break;
+        const Real fraction = curvature > 1.0e-20
+            ? std::min<Real>(1.0, numerator / (step_sites * curvature)) : 1.0;
+        for (int j = 0; j < count; ++j) alpha[j] += fraction * direction[j];
+    }
+    std::vector<Real> direction(db.movable_ids.size(), 0.0);
+    for (int j = 0; j < count; ++j) {
+        for (std::size_t i = 0; i < direction.size(); ++i)
+            direction[i] -= step_sites * metric[i] * alpha[j] * cuts[j].gx[i];
+    }
+    return direction;
+}
+
+std::size_t constrained_legal_bundle_refine(
+    Database& db, std::vector<Segment>& segments, int passes,
+    int maximum_cuts, Real initial_step_sites) {
+    std::vector<LegalBundleCut> cuts;
+    Real step_sites = initial_step_sites;
+    std::size_t accepted = 0;
+    for (int pass = 0; pass < passes; ++pass) {
+        std::vector<Real> gx, gy;
+        const Real before = exact_hpwl_subgradient(db, 100, &gx, &gy);
+        append_legal_bundle_cut(db, before, gx, maximum_cuts, cuts);
+        const std::vector<Real> direction =
+            legal_bundle_direction(db, cuts, step_sites);
+        const MovableCoordinates original = save_movable_coordinates(db);
+        std::vector<Desired> desired(db.nodes.size());
+        for (std::size_t i = 0; i < db.movable_ids.size(); ++i) {
+            const int id = db.movable_ids[i];
+            desired[id] = {db.nodes[id].x + direction[i], db.nodes[id].y};
+        }
+        for (Segment& segment : segments) abacus_segment(db, segment, desired);
+        const Real after = exact_hpwl(db);
+        const LegalityResult legal = check_legality(db);
+        if (legal.legal && after + 1.0e-9 < before) {
+            ++accepted;
+            step_sites = std::min(initial_step_sites * 4.0, step_sites * 1.15);
+            std::cout << "[LegalBundleSerious] pass=" << pass
+                      << " before=" << before << " after=" << after
+                      << " cuts=" << cuts.size()
+                      << " step_sites=" << step_sites << '\n';
+        } else {
+            std::vector<Real> trial_gx, trial_gy;
+            exact_hpwl_subgradient(db, 100, &trial_gx, &trial_gy);
+            append_legal_bundle_cut(db, after, trial_gx, maximum_cuts, cuts);
+            restore_movable_coordinates(db, original);
+            step_sites *= 0.5;
+            std::cout << "[LegalBundleNull] pass=" << pass
+                      << " before=" << before << " trial=" << after
+                      << " legal=" << (legal.legal ? 1 : 0)
+                      << " cuts=" << cuts.size()
+                      << " step_sites=" << step_sites << '\n';
+            if (step_sites < 0.125) break;
+        }
+    }
+    return accepted;
+}
+
+bool row_relegalization(Database& db, std::vector<Segment>& segments,
+                        int passes, int row_search_limit) {
+    bool improved = false;
+    for (int pass = 0; pass < passes; ++pass) {
+        const std::vector<std::vector<int>> incident = build_incident_nets(db);
+        std::vector<Desired> desired(db.nodes.size());
+        for (int id : db.movable_ids) {
+            const auto target = net_target(db, id, incident[id]);
+            const int row_index = nearest_row(
+                db, db.nodes[id].y - 0.5 * db.nodes[id].height);
+            const Real row_height = db.rows[row_index].height;
+            desired[id].x = db.nodes[id].x;
+            desired[id].y = db.nodes[id].y +
+                std::clamp(target.second - db.nodes[id].y,
+                           -row_height, row_height);
+        }
+        Database candidate = db;
+        std::vector<Segment> candidate_segments = build_segments(candidate);
+        try {
+            greedy_legalize(candidate, desired, candidate_segments, row_search_limit);
+            for (Segment& segment : candidate_segments)
+                abacus_segment(candidate, segment, desired);
+        } catch (const std::exception& error) {
+            std::cout << "[RowRelegalize] pass=" << pass
+                      << " rejected=" << error.what() << '\n';
+            break;
+        }
+        const Real before = exact_hpwl(db);
+        const Real after = exact_hpwl(candidate);
+        const LegalityResult legal = check_legality(candidate);
+        if (legal.legal && after + 1.0e-9 < before) {
+            db = std::move(candidate);
+            segments = std::move(candidate_segments);
+            improved = true;
+            std::cout << "[RowRelegalize] pass=" << pass
+                      << " before=" << before << " after=" << after << '\n';
+        } else {
+            std::cout << "[RowRelegalize] pass=" << pass
+                      << " no_improvement before=" << before
+                      << " candidate=" << after << '\n';
+            break;
+        }
+    }
+    return improved;
+}
+
 bool overlaps(Real alo, Real ahi, Real blo, Real bhi, Real tolerance) {
     return std::min(ahi, bhi) - std::max(alo, blo) > tolerance;
 }
 
 }  // namespace
+
+LegalizationProxy evaluate_legalization_proxy(const Database& db) {
+    LegalizationProxy proxy;
+    if (db.movable_ids.empty() || db.rows.empty()) return proxy;
+    const std::vector<Segment> segments = build_segments(db);
+    std::vector<std::vector<int>> segments_by_row(db.rows.size());
+    for (int s = 0; s < static_cast<int>(segments.size()); ++s)
+        segments_by_row[segments[s].row].push_back(s);
+    std::vector<Real> demand(segments.size(), 0.0);
+    Real total_width = 0.0;
+    Real unassigned_width = 0.0;
+    for (int id : db.movable_ids) {
+        const Node& node = db.nodes[id];
+        const Real bottom = node.y - 0.5 * node.height;
+        const int row_index = nearest_row(db, bottom);
+        const Row& row = db.rows[row_index];
+        proxy.mean_row_distance += std::abs(bottom - row.y) /
+            std::max<Real>(row.height, 1.0e-9);
+        total_width += node.width;
+        int best_segment = -1;
+        Real best_distance = std::numeric_limits<Real>::infinity();
+        const Real left = node.x - 0.5 * node.width;
+        const Real right = node.x + 0.5 * node.width;
+        for (int s : segments_by_row[row_index]) {
+            const Real distance = left >= segments[s].lo && right <= segments[s].hi
+                ? 0.0 : std::min(std::abs(left - segments[s].hi),
+                                 std::abs(right - segments[s].lo));
+            if (distance < best_distance) {
+                best_distance = distance;
+                best_segment = s;
+            }
+        }
+        if (best_segment >= 0) demand[best_segment] += node.width;
+        else unassigned_width += node.width;
+    }
+    proxy.mean_row_distance /= static_cast<Real>(db.movable_ids.size());
+    Real excess = unassigned_width;
+    for (int s = 0; s < static_cast<int>(segments.size()); ++s)
+        excess += std::max<Real>(0.0, demand[s] - (segments[s].hi - segments[s].lo));
+    proxy.segment_overflow = excess / std::max<Real>(total_width, 1.0);
+    return proxy;
+}
+
+void compute_legalization_force(const Database& db, Real congestion_gain,
+                                std::vector<Real>& grad_x,
+                                std::vector<Real>& grad_y) {
+    grad_x.assign(db.nodes.size(), 0.0);
+    grad_y.assign(db.nodes.size(), 0.0);
+    if (db.rows.empty() || db.movable_ids.empty()) return;
+
+    const std::vector<Segment> segments = build_segments(db);
+    std::vector<std::vector<int>> by_row(db.rows.size());
+    for (int s = 0; s < static_cast<int>(segments.size()); ++s) {
+        by_row[segments[s].row].push_back(s);
+    }
+    std::vector<Real> demand(segments.size(), 0.0);
+
+    auto closest_segment = [&](const Node& node, int row_index,
+                               Real& target_x, Real& distance) {
+        const std::vector<int>& row_segments = by_row[row_index];
+        int best = -1;
+        distance = std::numeric_limits<Real>::infinity();
+        if (row_segments.empty()) return best;
+        auto position = std::lower_bound(
+            row_segments.begin(), row_segments.end(), node.x,
+            [&](int segment, Real x) { return segments[segment].hi < x; });
+        const int center = static_cast<int>(position - row_segments.begin());
+        for (int offset = -2; offset <= 2; ++offset) {
+            const int index = center + offset;
+            if (index < 0 || index >= static_cast<int>(row_segments.size())) continue;
+            const int s = row_segments[index];
+            const Real lo = segments[s].lo + 0.5 * node.width;
+            const Real hi = segments[s].hi - 0.5 * node.width;
+            if (hi < lo) continue;
+            const Real candidate_x = std::clamp(node.x, lo, hi);
+            const Real candidate_distance = std::abs(node.x - candidate_x);
+            if (candidate_distance < distance) {
+                best = s;
+                distance = candidate_distance;
+                target_x = candidate_x;
+            }
+        }
+        return best;
+    };
+
+    // Estimate segment load from the current continuous placement.
+    for (int id : db.movable_ids) {
+        const Node& node = db.nodes[id];
+        const int row = nearest_row(db, node.y - 0.5 * node.height);
+        Real target_x = node.x;
+        Real distance = 0.0;
+        const int segment = closest_segment(node, row, target_x, distance);
+        if (segment >= 0) demand[segment] += node.width;
+    }
+
+    // Compare only the nearest row and its two neighbors. This remains a
+    // continuous attraction field; it does not assign a row or segment.
+    for (int id : db.movable_ids) {
+        const Node& node = db.nodes[id];
+        const Real bottom = node.y - 0.5 * node.height;
+        const int base_row = nearest_row(db, bottom);
+        Real best_cost = std::numeric_limits<Real>::infinity();
+        Real best_x = node.x;
+        Real best_y = bottom;
+        for (int row = std::max(0, base_row - 1);
+             row <= std::min(static_cast<int>(db.rows.size()) - 1, base_row + 1);
+             ++row) {
+            if (node.height > db.rows[row].height + 1.0e-6) continue;
+            Real target_x = node.x;
+            Real x_distance = 0.0;
+            const int segment = closest_segment(node, row, target_x, x_distance);
+            if (segment < 0) continue;
+            const Real capacity = std::max<Real>(
+                segments[segment].hi - segments[segment].lo, 1.0);
+            const Real congestion = std::max<Real>(
+                0.0, demand[segment] / capacity - 1.0);
+            const Real row_height = std::max<Real>(db.rows[row].height, 1.0e-9);
+            const Real cost = std::abs(bottom - db.rows[row].y) / row_height +
+                x_distance / row_height + congestion_gain * congestion;
+            if (cost < best_cost) {
+                best_cost = cost;
+                best_x = target_x;
+                best_y = db.rows[row].y;
+            }
+        }
+        const Real row_height = std::max<Real>(
+            db.rows[base_row].height, 1.0e-9);
+        const Real pin_scale = std::max(1, db.node_pin_weight[id]);
+        grad_x[id] = pin_scale * std::clamp(
+            (node.x - best_x) / row_height, -1.0, 1.0);
+        grad_y[id] = pin_scale * std::clamp(
+            (bottom - best_y) / row_height, -1.0, 1.0);
+    }
+}
 
 LegalityResult check_legality(const Database& db, Real tolerance) {
     LegalityResult result;
@@ -661,31 +1177,114 @@ LegalizeResult legalize_and_refine(Database& db, const LegalizeConfig& config) {
     legal = check_legality(db);
     if (!legal.legal) throw std::runtime_error("Abacus produced illegal placement: " + legal.first_error);
 
-    if (config.run_detailed) detailed_reorder(db, segments, config.detailed_passes);
-    save_legal_snapshot(db, config, "adjacent");
-    if (config.run_dreamplace_detailed) {
-        k_reorder(db, segments, config.k_reorder_size, config.detailed_passes);
+    if (config.row_relegalization_passes > 0) {
+        row_relegalization(db, segments, config.row_relegalization_passes,
+                           config.row_search_limit);
     }
-    result.hpwl_after_k_reorder = exact_hpwl(db);
-    save_legal_snapshot(db, config, "k_reorder");
-    legal = check_legality(db);
-    if (!legal.legal) throw std::runtime_error(
-        "K-Reorder produced illegal placement: " + legal.first_error);
+    const int outer_rounds = std::max(1, config.detailed_outer_rounds);
+    Real previous_round = exact_hpwl(db);
+    for (int round = 0; round < outer_rounds; ++round) {
+        // Cross-row swaps in the previous round invalidate the original
+        // segment membership.  Rebuild it from the accepted legal placement
+        // before applying any order-based operator again.
+        segments = rebuild_segment_cells(db);
+        if (config.run_detailed) {
+            const MovableCoordinates before = save_movable_coordinates(db);
+            detailed_reorder(db, segments, config.detailed_passes);
+            legal = check_legality(db);
+            if (!legal.legal) {
+                restore_movable_coordinates(db, before);
+                segments = rebuild_segment_cells(db);
+                std::cout << "[DetailedGuard] adjacent rollback: "
+                          << legal.first_error << '\n';
+            }
+        }
+        save_legal_snapshot(db, config, "adjacent");
+        if (config.run_dreamplace_detailed) {
+            const MovableCoordinates before = save_movable_coordinates(db);
+            k_reorder(db, segments, config.k_reorder_size,
+                      config.detailed_passes);
+            legal = check_legality(db);
+            if (!legal.legal) {
+                restore_movable_coordinates(db, before);
+                segments = rebuild_segment_cells(db);
+                std::cout << "[DetailedGuard] k-reorder rollback: "
+                          << legal.first_error << '\n';
+            }
+        }
+        if (config.cell_insertion_passes > 0) {
+            const MovableCoordinates before = save_movable_coordinates(db);
+            cell_insertion(db, segments, config.cell_insertion_window,
+                           config.cell_insertion_passes);
+            legal = check_legality(db);
+            if (!legal.legal) {
+                restore_movable_coordinates(db, before);
+                segments = rebuild_segment_cells(db);
+                std::cout << "[DetailedGuard] insertion rollback: "
+                          << legal.first_error << '\n';
+            }
+        }
+        result.hpwl_after_k_reorder = exact_hpwl(db);
+        save_legal_snapshot(db, config, "k_reorder");
+        legal = check_legality(db);
+        if (!legal.legal) throw std::runtime_error(
+            "K-Reorder/insertion produced illegal placement: " + legal.first_error);
 
-    if (config.run_dreamplace_detailed) {
-        global_swap(db, config.global_swap_passes);
-    }
-    result.hpwl_after_global_swap = exact_hpwl(db);
-    save_legal_snapshot(db, config, "global_swap");
-    legal = check_legality(db);
-    if (!legal.legal) throw std::runtime_error(
-        "global swap produced illegal placement: " + legal.first_error);
+        if (config.run_dreamplace_detailed) {
+            const MovableCoordinates before = save_movable_coordinates(db);
+            global_swap(db, config.global_swap_passes);
+            legal = check_legality(db);
+            if (!legal.legal) {
+                restore_movable_coordinates(db, before);
+                std::cout << "[DetailedGuard] global-swap rollback: "
+                          << legal.first_error << '\n';
+            }
+        }
+        result.hpwl_after_global_swap = exact_hpwl(db);
+        save_legal_snapshot(db, config, "global_swap");
+        legal = check_legality(db);
+        if (!legal.legal) throw std::runtime_error(
+            "global swap produced illegal placement: " + legal.first_error);
 
-    if (config.run_dreamplace_detailed) {
-        independent_set_matching(db, config.independent_set_size);
+        if (config.run_dreamplace_detailed) {
+            const MovableCoordinates before = save_movable_coordinates(db);
+            independent_set_matching(db, config.independent_set_size,
+                                     config.use_hungarian_matching);
+            legal = check_legality(db);
+            if (!legal.legal) {
+                restore_movable_coordinates(db, before);
+                std::cout << "[DetailedGuard] independent-set rollback: "
+                          << legal.first_error << '\n';
+            }
+        }
+        segments = rebuild_segment_cells(db);
+        if (config.projected_subgradient_passes > 0) {
+            projected_hpwl_refine(db, segments,
+                                  config.projected_subgradient_passes,
+                                  config.projected_step_sites);
+        }
+        if (config.constrained_bundle_passes > 0) {
+            constrained_legal_bundle_refine(
+                db, segments, config.constrained_bundle_passes,
+                config.constrained_bundle_size,
+                config.constrained_bundle_step_sites);
+        }
+        result.hpwl_after_constrained_bundle = exact_hpwl(db);
+        result.hpwl_after_independent_set = exact_hpwl(db);
+        save_legal_snapshot(db, config, "independent_set");
+        legal = check_legality(db);
+        if (!legal.legal) throw std::runtime_error(
+            "detailed round produced illegal placement: " + legal.first_error);
+        const Real current_round = result.hpwl_after_independent_set;
+        const Real relative = (previous_round - current_round) /
+            std::max<Real>(previous_round, 1.0);
+        std::cout << "[DetailedOuter] round=" << round
+                  << " hpwl=" << current_round
+                  << " relative_improvement=" << relative << '\n';
+        if (round + 1 < outer_rounds &&
+            relative < config.minimum_relative_improvement) break;
+        previous_round = current_round;
     }
-    result.hpwl_after_independent_set = exact_hpwl(db);
-    save_legal_snapshot(db, config, "independent_set");
     result.hpwl_after_detailed = result.hpwl_after_independent_set;
     result.legality = check_legality(db);
     if (!result.legality.legal) {

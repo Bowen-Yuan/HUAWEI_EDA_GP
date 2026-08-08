@@ -97,9 +97,9 @@ std::vector<Filler> initialize_fillers(const Database& db, Real target_density,
 }
 
 ElectricDensity::ElectricDensity(const Database& db, int bins_x, int bins_y,
-                                 Real target_density)
+                                  Real target_density, ElectricFieldModel field_model)
     : nx_(bins_x), ny_(bins_y), xl_(db.xl), yl_(db.yl), xh_(db.xh), yh_(db.yh),
-      target_density_(target_density) {
+      target_density_(target_density), field_model_(field_model) {
     if (!is_power_of_two(nx_) || !is_power_of_two(ny_)) {
         throw std::runtime_error("electric grid dimensions must be powers of two");
     }
@@ -115,7 +115,9 @@ ElectricDensity::ElectricDensity(const Database& db, int bins_x, int bins_y,
     for (int id : db.movable_ids) movable_area_ += db.nodes[id].area();
     std::cout << "[Electric] grid=" << nx_ << 'x' << ny_
               << " bin=" << bin_w_ << 'x' << bin_h_
-              << " target=" << target_density_ << '\n';
+              << " target=" << target_density_
+              << " field=" << (field_model_ == ElectricFieldModel::MixedSpectral
+                                    ? "mixed-spectral" : "finite-difference") << '\n';
 }
 
 void ElectricDensity::deposit_rectangle(Real cx, Real cy, Real width, Real height,
@@ -220,26 +222,44 @@ DensityResult ElectricDensity::compute(
             coefficients[index] = k2 > 0.0 ? coefficients[index] / k2 : 0.0;
         }
     }
-    std::vector<Real> potential = coefficients;
+    const std::vector<Real> potential_coefficients = coefficients;
+    std::vector<Real> potential = potential_coefficients;
     idct2_orthonormal(potential, nx_, ny_);
     for (int i = 0; i < nx_ * ny_; ++i) result.energy += 0.5 * rho[i] * potential[i] * bin_area;
 
     if (!node_grad_x && !filler_grad_x) return result;
     std::vector<Real> grad_phi_x(nx_ * ny_, 0.0);
     std::vector<Real> grad_phi_y(nx_ * ny_, 0.0);
-    #pragma omp parallel for schedule(static)
-    for (int y = 0; y < ny_; ++y) {
-        for (int x = 0; x < nx_; ++x) {
-            const int xm = std::max(0, x - 1);
-            const int xp = std::min(nx_ - 1, x + 1);
-            const int ym = std::max(0, y - 1);
-            const int yp = std::min(ny_ - 1, y + 1);
-            grad_phi_x[y * nx_ + x] =
-                (potential[y * nx_ + xp] - potential[y * nx_ + xm]) /
-                ((xp - xm) * bin_w_);
-            grad_phi_y[y * nx_ + x] =
-                (potential[yp * nx_ + x] - potential[ym * nx_ + x]) /
-                ((yp - ym) * bin_h_);
+    if (field_model_ == ElectricFieldModel::MixedSpectral) {
+        grad_phi_x = potential_coefficients;
+        grad_phi_y = potential_coefficients;
+        #pragma omp parallel for schedule(static)
+        for (int y = 0; y < ny_; ++y) {
+            const Real ky = kPi * y / (yh_ - yl_);
+            for (int x = 0; x < nx_; ++x) {
+                const Real kx = kPi * x / (xh_ - xl_);
+                const int index = y * nx_ + x;
+                grad_phi_x[index] *= -kx;
+                grad_phi_y[index] *= -ky;
+            }
+        }
+        inverse_mixed_sine_cosine2(grad_phi_x, nx_, ny_, true);
+        inverse_mixed_sine_cosine2(grad_phi_y, nx_, ny_, false);
+    } else {
+        #pragma omp parallel for schedule(static)
+        for (int y = 0; y < ny_; ++y) {
+            for (int x = 0; x < nx_; ++x) {
+                const int xm = std::max(0, x - 1);
+                const int xp = std::min(nx_ - 1, x + 1);
+                const int ym = std::max(0, y - 1);
+                const int yp = std::min(ny_ - 1, y + 1);
+                grad_phi_x[y * nx_ + x] =
+                    (potential[y * nx_ + xp] - potential[y * nx_ + xm]) /
+                    ((xp - xm) * bin_w_);
+                grad_phi_y[y * nx_ + x] =
+                    (potential[yp * nx_ + x] - potential[ym * nx_ + x]) /
+                    ((yp - ym) * bin_h_);
+            }
         }
     }
     if (node_grad_x) node_grad_x->assign(db.nodes.size(), 0.0);

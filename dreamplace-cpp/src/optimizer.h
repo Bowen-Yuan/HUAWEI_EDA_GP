@@ -11,7 +11,7 @@ namespace dpcpp {
 
 enum class WirelengthModel { WeightedAverage, ExactHpwl };
 enum class GlobalOptimizer { DreamplaceNesterov, HeavyBall, Adam, AMSGrad, AdaGrad };
-enum class LambdaPolicy { Dreamplace, Trajectory, Ratio };
+enum class LambdaPolicy { Dreamplace, Trajectory, Ratio, BandDual };
 
 const char* wirelength_model_name(WirelengthModel model);
 const char* global_optimizer_name(GlobalOptimizer optimizer);
@@ -51,6 +51,8 @@ struct GlobalPlaceConfig {
     Real lambda_control_max = 1.0e12;
     bool enable_bundle = false;
     int bundle_size = 4;
+    int bundle_groups = 1;
+    int bundle_group_size = 3;
     int bundle_interval = 5;
     int bundle_min_interval = 2;
     Real bundle_cosine_trigger = 0.90;
@@ -62,6 +64,40 @@ struct GlobalPlaceConfig {
     Real refinement_learning_rate_scale = 0.05;
     Real refinement_lambda_gain = 0.20;
     GlobalOptimizer refinement_optimizer = GlobalOptimizer::AMSGrad;
+    bool legal_checkpoint_selection = false;
+    int legal_checkpoint_interval = 20;
+    int legal_checkpoint_detailed_passes = 1;
+    bool late_legal_projection = false;
+    int legal_projection_interval = 40;
+    Real legal_projection_mix = 0.25;
+    Real legal_projection_max_hpwl_ratio = 1.08;
+    Real legal_row_force = 0.0;
+    bool mixed_spectral_field = false;
+    bool multilevel_density = false;
+    int multilevel_min_bins = 128;
+    Real multilevel_middle_overflow = 0.30;
+    Real multilevel_fine_overflow = 0.15;
+    int gradient_sampling_samples = 0;
+    int gradient_sampling_interval = 5;
+    Real gradient_sampling_radius = 0.25;
+    bool serious_bundle = false;
+    Real serious_step_ratio = 0.10;
+    Real bundle_overflow_tolerance = 0.0;
+    bool progressive_legalization = false;
+    int progressive_density_iterations = 400;
+    Real progressive_overflow_lower = 0.07;
+    Real progressive_overflow_upper = 0.08;
+    Real progressive_hpwl_target = 7.5e7;
+    Real progressive_dual_kp = 0.055;
+    Real progressive_dual_ki = 0.002;
+    Real progressive_hpwl_gain = 0.035;
+    Real progressive_dual_switch_overflow = 0.11;
+    Real progressive_obstacle_scale = 0.20;
+    Real progressive_row_force = 0.03;
+    Real progressive_segment_force = 0.05;
+    Real progressive_congestion_gain = 2.0;
+    int progressive_obstacle_iterations = 200;
+    int progressive_filter_backtracks = 6;
     int snapshot_every = 0;
     std::string snapshot_dir;
     std::string metrics_path;
@@ -73,6 +109,8 @@ struct GlobalPlaceResult {
     bool have_feasible = false;
     int objective_evaluations = 0;
     double wall_time_seconds = 0.0;
+    Real selected_legal_hpwl = 0.0;
+    int selected_legal_iteration = -1;
 };
 
 GlobalPlaceResult global_place(Database& db, std::vector<Filler>& fillers,

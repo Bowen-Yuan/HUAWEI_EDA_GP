@@ -1,5 +1,6 @@
 #include "optimizer.h"
 
+#include "bookshelf.h"
 #include "nonsmooth.h"
 #include "wirelength.h"
 
@@ -22,6 +23,18 @@ struct Evaluation {
     Metrics metrics;
     std::vector<Real> gradient;
 };
+
+void save_smooth_global_snapshot(const Database& db,
+                                 const GlobalPlaceConfig& config,
+                                 int iteration) {
+    if (config.snapshot_every <= 0 || config.snapshot_dir.empty() ||
+        iteration % config.snapshot_every != 0) return;
+    std::ostringstream name;
+    name << "global_" << std::setw(4) << std::setfill('0') << iteration
+         << ".pl";
+    write_bookshelf_pl(
+        db, (std::filesystem::path(config.snapshot_dir) / name.str()).string());
+}
 
 std::vector<Real> capture(const Database& db, const std::vector<Filler>& fillers) {
     const std::size_t n = db.movable_ids.size() + fillers.size();
@@ -215,6 +228,7 @@ const char* lambda_policy_name(LambdaPolicy policy) {
     case LambdaPolicy::Dreamplace: return "dreamplace";
     case LambdaPolicy::Trajectory: return "trajectory";
     case LambdaPolicy::Ratio: return "ratio";
+    case LambdaPolicy::BandDual: return "hybrid-band-dual";
     }
     return "unknown";
 }
@@ -310,6 +324,7 @@ GlobalPlaceResult global_place(Database& db, std::vector<Filler>& fillers,
                       << " gamma=" << gamma
                       << " step=" << step << '\n';
         }
+        save_smooth_global_snapshot(db, config, iteration);
 
         const Real next_acceleration =
             0.5 * (1.0 + std::sqrt(4.0 * acceleration * acceleration + 1.0));

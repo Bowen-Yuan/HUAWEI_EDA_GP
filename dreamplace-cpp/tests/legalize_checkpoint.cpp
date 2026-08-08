@@ -13,13 +13,10 @@
 using namespace dpcpp;
 
 int main(int argc, char** argv) {
-    if (argc != 4 && argc != 5) {
+    if (argc < 4) {
         std::cerr << "usage: legalize_checkpoint <raw-base> <generated-global.pl> "
-                     "<output.pl> [--dreamplace-detailed]\n";
+                     "<output.pl> [legalization options]\n";
         return 1;
-    }
-    if (argc == 5 && std::string(argv[4]) != "--dreamplace-detailed") {
-        throw std::runtime_error("unknown legalization option");
     }
     std::string lower = argv[2];
     std::transform(lower.begin(), lower.end(), lower.begin(),
@@ -50,7 +47,31 @@ int main(int argc, char** argv) {
         throw std::runtime_error("checkpoint does not contain every movable node");
     }
     LegalizeConfig config;
-    config.run_dreamplace_detailed = argc == 5;
+    for (int i = 4; i < argc; ++i) {
+        const std::string option = argv[i];
+        auto value = [&]() -> std::string {
+            if (++i >= argc) throw std::runtime_error("missing legalization option value");
+            return argv[i];
+        };
+        if (option == "--dreamplace-detailed") config.run_dreamplace_detailed = true;
+        else if (option == "--legal-refine-rounds")
+            config.detailed_outer_rounds = std::stoi(value());
+        else if (option == "--cell-insertion-passes")
+            config.cell_insertion_passes = std::stoi(value());
+        else if (option == "--cell-insertion-window")
+            config.cell_insertion_window = std::stoi(value());
+        else if (option == "--legal-projected-passes")
+            config.projected_subgradient_passes = std::stoi(value());
+        else if (option == "--legal-projected-step-sites")
+            config.projected_step_sites = std::stod(value());
+        else if (option == "--row-relegalization-passes")
+            config.row_relegalization_passes = std::stoi(value());
+        else if (option == "--independent-set-size")
+            config.independent_set_size = std::stoi(value());
+        else if (option == "--hungarian-matching")
+            config.use_hungarian_matching = true;
+        else throw std::runtime_error("unknown legalization option: " + option);
+    }
     const LegalizeResult result = legalize_and_refine(db, config);
     write_bookshelf_pl(db, argv[3]);
     std::cout << std::setprecision(12)

@@ -11,5 +11,9 @@ primary_benchmarks: [adaptec1, adaptec2]
 paper_targets:
   adaptec1_final_hpwl_m: 73.22
   adaptec2_final_hpwl_m: 82.22
-current_hypothesis: H1
-next_action: close the remaining 2-3% legal HPWL gap with mixed spectral fields and stronger legal detailed placement
+current_hypothesis: H3
+next_action: replace the destructive center-cluster HPWL-only continuation with density-tangent exact-HPWL directions before the 7-8% band
+experimental_hypothesis: post-legal fixed-topology bundle improves exact legal HPWL
+experimental_status: supported on adaptec1; pre-legal grouped bundle rejected for final quality
+progressive_hypothesis: continuous obstacle and segment forces reduce the discrete legalization shock without smoothing HPWL
+progressive_status: partially supported; 83.254M/7.744% GP and 88.895M legal, target 75-80M not reached

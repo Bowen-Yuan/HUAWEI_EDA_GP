@@ -7,6 +7,8 @@
 
 namespace dpcpp {
 
+enum class ElectricFieldModel { FiniteDifference, MixedSpectral };
+
 struct Filler {
     Real x = 0.0;
     Real y = 0.0;
@@ -26,7 +28,8 @@ std::vector<Filler> initialize_fillers(const Database& db, Real target_density,
 class ElectricDensity {
 public:
     ElectricDensity(const Database& db, int bins_x, int bins_y,
-                    Real target_density);
+                    Real target_density,
+                    ElectricFieldModel field_model = ElectricFieldModel::FiniteDifference);
 
     DensityResult compute(const Database& db, const std::vector<Filler>& fillers,
                           std::vector<Real>* node_grad_x,
@@ -58,6 +61,7 @@ private:
     Real bin_w_ = 0.0;
     Real bin_h_ = 0.0;
     Real target_density_ = 1.0;
+    ElectricFieldModel field_model_ = ElectricFieldModel::FiniteDifference;
     Real movable_area_ = 0.0;
     std::vector<Real> fixed_density_;
     std::vector<Real> density_;
@@ -66,4 +70,3 @@ private:
 void clamp_to_region(Database& db, std::vector<Filler>& fillers);
 
 }  // namespace dpcpp
-
