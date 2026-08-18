@@ -3,7 +3,7 @@ param(
         "adaptec1", "adaptec2", "adaptec3", "adaptec4",
         "bigblue1", "bigblue2"
     ),
-    [int]$SnapshotEvery = 200
+    [int]$SnapshotEvery = 100
 )
 
 $ErrorActionPreference = "Stop"
