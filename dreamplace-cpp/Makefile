@@ -28,6 +28,9 @@ $(BUILD)/core_test.exe: tests/core_test.cpp $(CORE_OBJ) $(BUILD)/legalizer.o | $
 test: $(BUILD)/core_test.exe
 	./$(BUILD)/core_test.exe
 
+$(BUILD)/kernel_benchmark.exe: tests/kernel_benchmark.cpp $(CORE_OBJ) | $(BUILD)
+	$(CXX) $(CXXFLAGS) tests/kernel_benchmark.cpp $(CORE_OBJ) -o $@ $(LDFLAGS)
+
 $(BUILD)/legalize_checkpoint.exe: tests/legalize_checkpoint.cpp $(CORE_OBJ) $(BUILD)/legalizer.o | $(BUILD)
 	$(CXX) $(CXXFLAGS) tests/legalize_checkpoint.cpp $(CORE_OBJ) $(BUILD)/legalizer.o -o $@ $(LDFLAGS)
 

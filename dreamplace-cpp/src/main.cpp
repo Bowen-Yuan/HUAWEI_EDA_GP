@@ -71,9 +71,15 @@ void usage() {
         << "  --bundle-prox X      bundle proximal scaling\n"
         << "  --bundle-current-mix X  current-subgradient fraction in [0,1]\n"
         << "  --feasible-refinement  reset moments and refine along the 6.5%-7% boundary\n"
+        << "  --refine-start-overflow X  enter reduced-step refinement before feasibility\n"
         << "  --refine-lower-overflow X  lower edge of feasible band (default 0.065)\n"
         << "  --refine-lr-scale X  post-feasible learning-rate multiplier (default 0.05)\n"
         << "  --refine-lambda-gain X  feasible-band lambda feedback gain (default 0.20)\n"
+        << "  --refine-optimizer NAME  heavy-ball|adam|amsgrad|adagrad\n"
+        << "  --refine-active-set-radius X  epsilon-active radius after feasibility\n"
+        << "  --refine-active-set-decay N  iterations used to reach the refinement radius\n"
+        << "  --tangent-refinement  project feasible HPWL steps onto the density tangent\n"
+        << "  --refine-filter-backtracks N  exact feasible-filter backtracking limit\n"
         << "  --snapshot-every N  save global-layout snapshots every N steps\n"
         << "  --snapshot-dir DIR  snapshot output directory (default output/snapshots)\n"
         << "Experimental opt-in controls (defaults preserve the original flow):\n"
@@ -89,6 +95,21 @@ void usage() {
         << "  --gradient-samples N  nearby exact-subgradient samples per update\n"
         << "  --gradient-sampling-interval N  gradient-sampling interval\n"
         << "  --gradient-sampling-radius X  sampling radius in placement units\n"
+        << "  --refine-gradient-samples N  exact-gradient samples only after feasibility\n"
+        << "  --refine-gradient-radius X  post-feasible sampling radius\n"
+        << "  --active-set-radius X  epsilon-active exact-HPWL trial direction radius\n"
+        << "  --active-set-power X  epsilon-active triangular weight exponent\n"
+        << "  --adaptive-active-set  enable legacy radius controller\n"
+        << "  --adaptive-active-smart  enable windowed HPWL/overflow radius controller\n"
+        << "  --adaptive-active-predictive  enable phase-aware predictive radius controller\n"
+        << "  --adaptive-active-window N  smart-controller trend window\n"
+        << "  --adaptive-active-gain X  smart-controller update gain\n"
+        << "  --adaptive-active-deadband X  smart-controller overflow deadband\n"
+        << "  --adaptive-active-max-step X  maximum log-radius change per update\n"
+        << "  --adaptive-active-refinement  continue radius control after feasibility\n"
+        << "  --adaptive-active-refine-max-step X  refinement log-radius step cap\n"
+        << "  --adaptive-active-span-cap X  cap epsilon by this fraction of each net span\n"
+        << "  --primal-dual-step X  per-net simplex-dual ascent step\n"
         << "  --serious-bundle  enable serious/null trial acceptance below bundle threshold\n"
         << "  --serious-step-ratio X  actual/predicted decrease threshold\n"
         << "  --bundle-overflow-tolerance X  trial-only overflow filter tolerance\n"
@@ -107,11 +128,14 @@ void usage() {
         << "  --progressive-congestion-gain X  soft overfull-segment assignment cost\n"
         << "  --progressive-obstacle-iterations N  phase-3 force ramp length\n"
         << "  --progressive-filter-backtracks N  trial-filter backtracking limit\n"
+        << "  --progressive-no-filter  disable the opt-in stage trial filter\n"
         << "  --legal-refine-rounds N  outer legal detailed-placement rounds\n"
         << "  --cell-insertion-passes N  long-range legal insertion passes\n"
         << "  --cell-insertion-window N  maximum insertion rank distance\n"
         << "  --legal-projected-passes N  legal projected exact-HPWL passes\n"
         << "  --legal-projected-step-sites X  initial projected step in sites\n"
+        << "  --legal-projected-active-radius X  epsilon-active radius for legal trial directions\n"
+        << "  --legal-projected-active-power X  epsilon-active legal direction exponent\n"
         << "  --legal-bundle-passes N  fixed-topology constrained bundle passes\n"
         << "  --legal-bundle-size N  retained cuts in the legal bundle\n"
         << "  --legal-bundle-step-sites X  initial legal-bundle step in sites\n"
@@ -152,6 +176,7 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--sigma-ratio") options.sigma_ratio = std::stod(require_value(i, argc, argv));
         else if (arg == "--initial-pl") options.initial_pl = require_value(i, argc, argv);
         else if (arg == "--output") options.output_dir = require_value(i, argc, argv);
+        else if (arg == "--profile") options.gp.profile = true;
         else if (arg == "--log-every") options.gp.log_every = std::stoi(require_value(i, argc, argv));
         else if (arg == "--no-fillers") options.gp.enable_fillers = false;
         else if (arg == "--no-abacus") options.legal.run_abacus = false;
@@ -198,9 +223,22 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--bundle-prox") options.gp.bundle_prox_scale = std::stod(require_value(i, argc, argv));
         else if (arg == "--bundle-current-mix") options.gp.bundle_current_mix = std::stod(require_value(i, argc, argv));
         else if (arg == "--feasible-refinement") options.gp.feasible_refinement = true;
+        else if (arg == "--refine-start-overflow") options.gp.refinement_start_overflow = std::stod(require_value(i, argc, argv));
         else if (arg == "--refine-lower-overflow") options.gp.refinement_lower_overflow = std::stod(require_value(i, argc, argv));
         else if (arg == "--refine-lr-scale") options.gp.refinement_learning_rate_scale = std::stod(require_value(i, argc, argv));
         else if (arg == "--refine-lambda-gain") options.gp.refinement_lambda_gain = std::stod(require_value(i, argc, argv));
+        else if (arg == "--refine-optimizer") {
+            const std::string value = require_value(i, argc, argv);
+            if (value == "heavy-ball") options.gp.refinement_optimizer = GlobalOptimizer::HeavyBall;
+            else if (value == "adam") options.gp.refinement_optimizer = GlobalOptimizer::Adam;
+            else if (value == "amsgrad") options.gp.refinement_optimizer = GlobalOptimizer::AMSGrad;
+            else if (value == "adagrad") options.gp.refinement_optimizer = GlobalOptimizer::AdaGrad;
+            else throw std::runtime_error("unknown refinement optimizer: " + value);
+        }
+        else if (arg == "--refine-active-set-radius") options.gp.refinement_active_set_radius = std::stod(require_value(i, argc, argv));
+        else if (arg == "--refine-active-set-decay") options.gp.refinement_active_set_decay_iterations = std::stoi(require_value(i, argc, argv));
+        else if (arg == "--tangent-refinement") options.gp.tangent_refinement = true;
+        else if (arg == "--refine-filter-backtracks") options.gp.refinement_filter_backtracks = std::stoi(require_value(i, argc, argv));
         else if (arg == "--snapshot-every") options.gp.snapshot_every = std::stoi(require_value(i, argc, argv));
         else if (arg == "--snapshot-dir") options.gp.snapshot_dir = require_value(i, argc, argv);
         else if (arg == "--legal-checkpoints") options.gp.legal_checkpoint_selection = true;
@@ -215,6 +253,31 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--gradient-samples") options.gp.gradient_sampling_samples = std::stoi(require_value(i, argc, argv));
         else if (arg == "--gradient-sampling-interval") options.gp.gradient_sampling_interval = std::stoi(require_value(i, argc, argv));
         else if (arg == "--gradient-sampling-radius") options.gp.gradient_sampling_radius = std::stod(require_value(i, argc, argv));
+        else if (arg == "--refine-gradient-samples") options.gp.refinement_gradient_sampling_samples = std::stoi(require_value(i, argc, argv));
+        else if (arg == "--refine-gradient-radius") options.gp.refinement_gradient_sampling_radius = std::stod(require_value(i, argc, argv));
+        else if (arg == "--active-set-radius") options.gp.active_set_radius = std::stod(require_value(i, argc, argv));
+        else if (arg == "--active-set-power") options.gp.active_set_power = std::stod(require_value(i, argc, argv));
+        else if (arg == "--adaptive-active-set") options.gp.adaptive_active_set = true;
+        else if (arg == "--adaptive-active-smart") {
+            options.gp.adaptive_active_set = true;
+            options.gp.adaptive_active_smart = true;
+        }
+        else if (arg == "--adaptive-active-predictive") {
+            options.gp.adaptive_active_set = true;
+            options.gp.adaptive_active_smart = true;
+            options.gp.adaptive_active_predictive = true;
+        }
+        else if (arg == "--adaptive-active-min-scale") options.gp.adaptive_active_set_min_scale = std::stod(require_value(i, argc, argv));
+        else if (arg == "--adaptive-active-max-scale") options.gp.adaptive_active_set_max_scale = std::stod(require_value(i, argc, argv));
+        else if (arg == "--adaptive-active-interval") options.gp.adaptive_active_set_interval = std::stoi(require_value(i, argc, argv));
+        else if (arg == "--adaptive-active-window") options.gp.adaptive_active_set_window = std::stoi(require_value(i, argc, argv));
+        else if (arg == "--adaptive-active-gain") options.gp.adaptive_active_set_gain = std::stod(require_value(i, argc, argv));
+        else if (arg == "--adaptive-active-deadband") options.gp.adaptive_active_set_deadband = std::stod(require_value(i, argc, argv));
+        else if (arg == "--adaptive-active-max-step") options.gp.adaptive_active_set_max_log_step = std::stod(require_value(i, argc, argv));
+        else if (arg == "--adaptive-active-refinement") options.gp.adaptive_active_set_refinement = true;
+        else if (arg == "--adaptive-active-refine-max-step") options.gp.adaptive_active_set_refinement_max_log_step = std::stod(require_value(i, argc, argv));
+        else if (arg == "--adaptive-active-span-cap") options.gp.adaptive_active_set_span_cap = std::stod(require_value(i, argc, argv));
+        else if (arg == "--primal-dual-step") options.gp.primal_dual_step = std::stod(require_value(i, argc, argv));
         else if (arg == "--serious-bundle") options.gp.serious_bundle = true;
         else if (arg == "--serious-step-ratio") options.gp.serious_step_ratio = std::stod(require_value(i, argc, argv));
         else if (arg == "--bundle-overflow-tolerance") options.gp.bundle_overflow_tolerance = std::stod(require_value(i, argc, argv));
@@ -233,11 +296,14 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--progressive-congestion-gain") options.gp.progressive_congestion_gain = std::stod(require_value(i, argc, argv));
         else if (arg == "--progressive-obstacle-iterations") options.gp.progressive_obstacle_iterations = std::stoi(require_value(i, argc, argv));
         else if (arg == "--progressive-filter-backtracks") options.gp.progressive_filter_backtracks = std::stoi(require_value(i, argc, argv));
+        else if (arg == "--progressive-no-filter") options.gp.progressive_filter = false;
         else if (arg == "--legal-refine-rounds") options.legal.detailed_outer_rounds = std::stoi(require_value(i, argc, argv));
         else if (arg == "--cell-insertion-passes") options.legal.cell_insertion_passes = std::stoi(require_value(i, argc, argv));
         else if (arg == "--cell-insertion-window") options.legal.cell_insertion_window = std::stoi(require_value(i, argc, argv));
         else if (arg == "--legal-projected-passes") options.legal.projected_subgradient_passes = std::stoi(require_value(i, argc, argv));
         else if (arg == "--legal-projected-step-sites") options.legal.projected_step_sites = std::stod(require_value(i, argc, argv));
+        else if (arg == "--legal-projected-active-radius") options.legal.projected_active_set_radius = std::stod(require_value(i, argc, argv));
+        else if (arg == "--legal-projected-active-power") options.legal.projected_active_set_power = std::stod(require_value(i, argc, argv));
         else if (arg == "--legal-bundle-passes") options.legal.constrained_bundle_passes = std::stoi(require_value(i, argc, argv));
         else if (arg == "--legal-bundle-size") options.legal.constrained_bundle_size = std::stoi(require_value(i, argc, argv));
         else if (arg == "--legal-bundle-step-sites") options.legal.constrained_bundle_step_sites = std::stod(require_value(i, argc, argv));
@@ -272,6 +338,8 @@ Options parse_options(int argc, char** argv) {
         throw std::runtime_error("lambda control bounds are invalid");
     if (options.gp.refinement_lower_overflow < 0.0 ||
         options.gp.refinement_lower_overflow >= options.gp.stop_overflow ||
+        (options.gp.refinement_start_overflow >= 0.0 &&
+         options.gp.refinement_start_overflow < options.gp.stop_overflow) ||
         options.gp.refinement_learning_rate_scale <= 0.0 ||
         options.gp.refinement_lambda_gain <= 0.0)
         throw std::runtime_error("feasible-refinement parameters are invalid");
@@ -282,8 +350,27 @@ Options parse_options(int argc, char** argv) {
         options.gp.gradient_sampling_interval <= 0 ||
         options.gp.gradient_sampling_samples < 0 ||
         options.gp.gradient_sampling_radius < 0.0 ||
+        options.gp.refinement_gradient_sampling_samples < 0 ||
+        options.gp.refinement_gradient_sampling_radius < 0.0 ||
+        options.gp.active_set_radius < 0.0 ||
+        options.gp.active_set_power <= 0.0 ||
+        options.gp.primal_dual_step < 0.0 ||
+        options.gp.refinement_active_set_radius < -1.0 ||
+        options.gp.refinement_active_set_decay_iterations < 0 ||
+        options.gp.refinement_filter_backtracks < 0 ||
         options.gp.multilevel_min_bins <= 0)
         throw std::runtime_error("experimental GP intervals and sizes are invalid");
+    if (options.gp.adaptive_active_set_min_scale <= 0.0 ||
+        options.gp.adaptive_active_set_max_scale < options.gp.adaptive_active_set_min_scale ||
+        options.gp.adaptive_active_set_interval <= 0 ||
+        options.gp.adaptive_active_set_window <= 0 ||
+        options.gp.adaptive_active_set_gain <= 0.0 ||
+        options.gp.adaptive_active_set_deadband < 0.0 ||
+        options.gp.adaptive_active_set_max_log_step <= 0.0 ||
+        options.gp.adaptive_active_set_refinement_max_log_step <= 0.0 ||
+        options.gp.adaptive_active_set_span_cap < 0.0 ||
+        options.gp.adaptive_active_set_span_cap > 1.0)
+        throw std::runtime_error("adaptive active-set parameters are invalid");
     if (options.gp.legal_projection_mix < 0.0 || options.gp.legal_projection_mix > 1.0 ||
         options.gp.legal_projection_max_hpwl_ratio < 1.0 ||
         options.gp.legal_row_force < 0.0 || options.gp.serious_step_ratio < 0.0 ||
@@ -310,6 +397,8 @@ Options parse_options(int argc, char** argv) {
         options.legal.cell_insertion_passes < 0 || options.legal.cell_insertion_window <= 0 ||
         options.legal.projected_subgradient_passes < 0 ||
         options.legal.projected_step_sites <= 0.0 ||
+        options.legal.projected_active_set_radius < 0.0 ||
+        options.legal.projected_active_set_power <= 0.0 ||
         options.legal.constrained_bundle_passes < 0 ||
         options.legal.constrained_bundle_size <= 0 ||
         options.legal.constrained_bundle_step_sites <= 0.0 ||
@@ -337,6 +426,7 @@ void write_summary(const fs::path& path, const Database& db,
     out << "sigma_ratio=" << options.sigma_ratio << '\n';
     out << "bins=" << options.gp.bins_x << 'x' << options.gp.bins_y << '\n';
     out << "iterations=" << options.gp.iterations << '\n';
+    out << "profile=" << (options.gp.profile ? "true" : "false") << '\n';
     out << "wirelength_model=" << wirelength_model_name(options.gp.wirelength_model) << '\n';
     out << "optimizer=" << global_optimizer_name(options.gp.optimizer) << '\n';
     out << "lambda_policy=" << lambda_policy_name(options.gp.lambda_policy) << '\n';
@@ -348,11 +438,39 @@ void write_summary(const fs::path& path, const Database& db,
     out << "bundle_group_size=" << options.gp.bundle_group_size << '\n';
     out << "bundle_overflow_tolerance=" << options.gp.bundle_overflow_tolerance << '\n';
     out << "feasible_refinement=" << (options.gp.feasible_refinement ? "true" : "false") << '\n';
+    out << "refinement_active_set_radius=" << options.gp.refinement_active_set_radius << '\n';
+    out << "refinement_active_set_decay_iterations="
+        << options.gp.refinement_active_set_decay_iterations << '\n';
+    out << "tangent_refinement=" << (options.gp.tangent_refinement ? "true" : "false") << '\n';
+    out << "refinement_optimizer="
+        << global_optimizer_name(options.gp.refinement_optimizer) << '\n';
     out << "legal_checkpoint_selection=" << (options.gp.legal_checkpoint_selection ? "true" : "false") << '\n';
     out << "late_legal_projection=" << (options.gp.late_legal_projection ? "true" : "false") << '\n';
     out << "mixed_spectral_field=" << (options.gp.mixed_spectral_field ? "true" : "false") << '\n';
     out << "multilevel_density=" << (options.gp.multilevel_density ? "true" : "false") << '\n';
     out << "gradient_sampling_samples=" << options.gp.gradient_sampling_samples << '\n';
+    out << "refinement_gradient_sampling_samples="
+        << options.gp.refinement_gradient_sampling_samples << '\n';
+    out << "refinement_gradient_sampling_radius="
+        << options.gp.refinement_gradient_sampling_radius << '\n';
+    out << "active_set_radius=" << options.gp.active_set_radius << '\n';
+    out << "active_set_power=" << options.gp.active_set_power << '\n';
+    out << "adaptive_active_set=" << (options.gp.adaptive_active_set ? "true" : "false") << '\n';
+    out << "adaptive_active_smart=" << (options.gp.adaptive_active_smart ? "true" : "false") << '\n';
+    out << "adaptive_active_predictive=" << (options.gp.adaptive_active_predictive ? "true" : "false") << '\n';
+    out << "adaptive_active_set_min_scale=" << options.gp.adaptive_active_set_min_scale << '\n';
+    out << "adaptive_active_set_max_scale=" << options.gp.adaptive_active_set_max_scale << '\n';
+    out << "adaptive_active_set_interval=" << options.gp.adaptive_active_set_interval << '\n';
+    out << "adaptive_active_set_window=" << options.gp.adaptive_active_set_window << '\n';
+    out << "adaptive_active_set_gain=" << options.gp.adaptive_active_set_gain << '\n';
+    out << "adaptive_active_set_deadband=" << options.gp.adaptive_active_set_deadband << '\n';
+    out << "adaptive_active_set_max_log_step=" << options.gp.adaptive_active_set_max_log_step << '\n';
+    out << "adaptive_active_set_refinement=" << (options.gp.adaptive_active_set_refinement ? "true" : "false") << '\n';
+    out << "adaptive_active_set_refinement_max_log_step="
+        << options.gp.adaptive_active_set_refinement_max_log_step << '\n';
+    out << "adaptive_active_set_span_cap="
+        << options.gp.adaptive_active_set_span_cap << '\n';
+    out << "primal_dual_step=" << options.gp.primal_dual_step << '\n';
     out << "serious_bundle=" << (options.gp.serious_bundle ? "true" : "false") << '\n';
     out << "progressive_legalization=" << (options.gp.progressive_legalization ? "true" : "false") << '\n';
     out << "progressive_density_iterations=" << options.gp.progressive_density_iterations << '\n';
@@ -365,9 +483,14 @@ void write_summary(const fs::path& path, const Database& db,
     out << "progressive_segment_force=" << options.gp.progressive_segment_force << '\n';
     out << "progressive_congestion_gain=" << options.gp.progressive_congestion_gain << '\n';
     out << "progressive_obstacle_iterations=" << options.gp.progressive_obstacle_iterations << '\n';
+    out << "progressive_filter=" << (options.gp.progressive_filter ? "true" : "false") << '\n';
     out << "legal_refine_rounds=" << options.legal.detailed_outer_rounds << '\n';
     out << "cell_insertion_passes=" << options.legal.cell_insertion_passes << '\n';
     out << "projected_subgradient_passes=" << options.legal.projected_subgradient_passes << '\n';
+    out << "projected_active_set_radius="
+        << options.legal.projected_active_set_radius << '\n';
+    out << "projected_active_set_power="
+        << options.legal.projected_active_set_power << '\n';
     out << "constrained_bundle_passes=" << options.legal.constrained_bundle_passes << '\n';
     out << "constrained_bundle_size=" << options.legal.constrained_bundle_size << '\n';
     out << "row_relegalization_passes=" << options.legal.row_relegalization_passes << '\n';
@@ -386,6 +509,10 @@ void write_summary(const fs::path& path, const Database& db,
     out << "constrained_bundle_hpwl=" << legal.hpwl_after_constrained_bundle << '\n';
     out << "detailed_hpwl=" << legal.hpwl_after_detailed << '\n';
     out << "internal_legal=" << (legal.legality.legal ? "true" : "false") << '\n';
+    out << "legal_boundary_errors=" << legal.legality.boundary_errors << '\n';
+    out << "legal_alignment_errors=" << legal.legality.alignment_errors << '\n';
+    out << "legal_overlap_errors=" << legal.legality.overlap_errors << '\n';
+    out << "legal_first_error=" << legal.legality.first_error << '\n';
 }
 
 }  // namespace

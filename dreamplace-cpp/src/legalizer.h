@@ -18,6 +18,8 @@ struct LegalizeConfig {
     int cell_insertion_window = 16;
     int projected_subgradient_passes = 0;
     Real projected_step_sites = 4.0;
+    Real projected_active_set_radius = 0.0;
+    Real projected_active_set_power = 4.0;
     int constrained_bundle_passes = 0;
     int constrained_bundle_size = 8;
     Real constrained_bundle_step_sites = 4.0;

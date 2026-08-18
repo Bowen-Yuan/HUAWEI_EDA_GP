@@ -95,6 +95,13 @@ default.  Removing the added flags restores the previous path; the full
 implementation and negative as well as positive ablations are documented in
 `report/legalization_aware_exact_hpwl_extensions_report.pdf`.
 
+The epsilon-active direction uses a cached flat pin topology internally. This
+is an implementation-only optimization and preserves the existing public
+function and command-line behavior. An experimental adaptive radius controller
+can be enabled with `--adaptive-active-set`; it is disabled by default and is
+documented, together with a1/a2 measurements, in
+`experiments/epsilon-active-optimization-20260813/analysis.md`.
+
 The smooth-to-exact continuation study has two additional opt-in components.
 `--bundle-groups N` partitions nets by stable net index and keeps an
 independent short HPWL bundle for each group; nearby exact-subgradient samples

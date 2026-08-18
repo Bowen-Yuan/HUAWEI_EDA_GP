@@ -10,6 +10,18 @@ Real exact_hpwl(const Database& db, int degree_limit = -1);
 Real exact_hpwl_subgradient(const Database& db, int gradient_degree_limit,
                             std::vector<Real>* grad_x,
                             std::vector<Real>* grad_y);
+Real exact_hpwl_active_set_direction(const Database& db,
+                                     int gradient_degree_limit,
+                                     Real radius,
+                                     Real power,
+                                     std::vector<Real>* grad_x,
+                                     std::vector<Real>* grad_y,
+                                     Real span_cap = 0.0);
+Real exact_hpwl_primal_dual_direction(const Database& db,
+                                      int gradient_degree_limit,
+                                      Real dual_step,
+                                      std::vector<Real>* grad_x,
+                                      std::vector<Real>* grad_y);
 Real exact_hpwl_group_subgradients(
     const Database& db, int gradient_degree_limit, int group_count,
     std::vector<Real>& group_hpwl,

@@ -105,7 +105,25 @@ ElectricDensity::ElectricDensity(const Database& db, int bins_x, int bins_y,
     }
     bin_w_ = (xh_ - xl_) / nx_;
     bin_h_ = (yh_ - yl_) / ny_;
-    fixed_density_.assign(nx_ * ny_, 0.0);
+    const std::size_t grid_size = static_cast<std::size_t>(nx_) * ny_;
+    fixed_density_.assign(grid_size, 0.0);
+    density_.resize(grid_size);
+    rho_.resize(grid_size);
+    coefficients_.resize(grid_size);
+    potential_.resize(grid_size);
+    grad_phi_x_.resize(grid_size);
+    grad_phi_y_.resize(grid_size);
+    kx_.resize(nx_);
+    ky_.resize(ny_);
+    inverse_k2_.resize(grid_size);
+    for (int x = 0; x < nx_; ++x) kx_[x] = kPi * x / (xh_ - xl_);
+    for (int y = 0; y < ny_; ++y) ky_[y] = kPi * y / (yh_ - yl_);
+    for (int y = 0; y < ny_; ++y) {
+        for (int x = 0; x < nx_; ++x) {
+            const Real k2 = kx_[x] * kx_[x] + ky_[y] * ky_[y];
+            inverse_k2_[y * nx_ + x] = k2 > 0.0 ? 1.0 / k2 : 0.0;
+        }
+    }
     for (int id : db.fixed_ids) {
         const Node& node = db.nodes[id];
         if (node.terminal_ni) continue;
@@ -113,6 +131,18 @@ ElectricDensity::ElectricDensity(const Database& db, int bins_x, int bins_y,
                           target_density_, fixed_density_);
     }
     for (int id : db.movable_ids) movable_area_ += db.nodes[id].area();
+    movable_effective_width_.resize(db.movable_ids.size());
+    movable_effective_height_.resize(db.movable_ids.size());
+    movable_charge_ratio_.resize(db.movable_ids.size());
+    const Real sqrt2 = std::sqrt(2.0);
+    for (std::size_t m = 0; m < db.movable_ids.size(); ++m) {
+        const Node& node = db.nodes[db.movable_ids[m]];
+        const Real width = std::max(node.width, sqrt2 * bin_w_);
+        const Real height = std::max(node.height, sqrt2 * bin_h_);
+        movable_effective_width_[m] = width;
+        movable_effective_height_[m] = height;
+        movable_charge_ratio_[m] = node.area() / (width * height);
+    }
     std::cout << "[Electric] grid=" << nx_ << 'x' << ny_
               << " bin=" << bin_w_ << 'x' << bin_h_
               << " target=" << target_density_
@@ -179,72 +209,89 @@ DensityResult ElectricDensity::compute(
     std::vector<Real>* filler_grad_x, std::vector<Real>* filler_grad_y) {
     density_ = fixed_density_;
     const Real sqrt2 = std::sqrt(2.0);
-    for (int id : db.movable_ids) {
+    if (filler_effective_width_.size() != fillers.size()) {
+        filler_effective_width_.resize(fillers.size());
+        filler_effective_height_.resize(fillers.size());
+        filler_charge_ratio_.resize(fillers.size());
+        for (std::size_t i = 0; i < fillers.size(); ++i) {
+            const Filler& filler = fillers[i];
+            const Real width = std::max(filler.width, sqrt2 * bin_w_);
+            const Real height = std::max(filler.height, sqrt2 * bin_h_);
+            filler_effective_width_[i] = width;
+            filler_effective_height_[i] = height;
+            filler_charge_ratio_[i] = filler.width * filler.height / (width * height);
+        }
+    }
+    for (std::size_t m = 0; m < db.movable_ids.size(); ++m) {
+        const int id = db.movable_ids[m];
         const Node& node = db.nodes[id];
-        const Real width = std::max(node.width, sqrt2 * bin_w_);
-        const Real height = std::max(node.height, sqrt2 * bin_h_);
-        const Real ratio = node.area() / (width * height);
-        deposit_rectangle(node.x, node.y, width, height, ratio, density_);
+        deposit_rectangle(node.x, node.y,
+                          movable_effective_width_[m],
+                          movable_effective_height_[m],
+                          movable_charge_ratio_[m], density_);
     }
     const Real bin_area = bin_w_ * bin_h_;
     DensityResult result;
     // DREAMPlace evaluates overflow with num_filler_nodes=0.  Fillers belong
     // to the electrostatic objective, but including them in the stopping
     // metric biases overflow upward and corrupts gamma/checkpoint selection.
+    Real max_density = 0.0;
+    Real overflow = 0.0;
+    #pragma omp parallel for reduction(max:max_density) reduction(+:overflow) schedule(static)
     for (int i = 0; i < nx_ * ny_; ++i) {
-        result.max_density = std::max(result.max_density, density_[i] / bin_area);
-        result.overflow += std::max<Real>(
+        max_density = std::max(max_density, density_[i] / bin_area);
+        overflow += std::max<Real>(
             0.0, density_[i] - target_density_ * bin_area);
     }
+    result.max_density = max_density;
+    result.overflow = overflow;
     result.overflow /= std::max<Real>(1.0, movable_area_);
 
-    for (const Filler& filler : fillers) {
-        const Real width = std::max(filler.width, sqrt2 * bin_w_);
-        const Real height = std::max(filler.height, sqrt2 * bin_h_);
-        const Real ratio = filler.width * filler.height / (width * height);
-        deposit_rectangle(filler.x, filler.y, width, height, ratio, density_);
+    for (std::size_t i = 0; i < fillers.size(); ++i) {
+        deposit_rectangle(fillers[i].x, fillers[i].y,
+                          filler_effective_width_[i],
+                          filler_effective_height_[i],
+                          filler_charge_ratio_[i], density_);
     }
 
-    std::vector<Real> rho(nx_ * ny_);
     for (int i = 0; i < nx_ * ny_; ++i) {
         const Real relative = density_[i] / bin_area;
-        rho[i] = relative;
+        rho_[i] = relative;
     }
 
-    std::vector<Real> coefficients = rho;
-    dct2_orthonormal(coefficients, nx_, ny_);
-    for (int y = 0; y < ny_; ++y) {
-        const Real ky = kPi * y / (yh_ - yl_);
-        for (int x = 0; x < nx_; ++x) {
-            const Real kx = kPi * x / (xh_ - xl_);
-            const int index = y * nx_ + x;
-            const Real k2 = kx * kx + ky * ky;
-            coefficients[index] = k2 > 0.0 ? coefficients[index] / k2 : 0.0;
-        }
+    coefficients_ = rho_;
+    dct2_orthonormal(coefficients_, nx_, ny_);
+    for (int i = 0; i < nx_ * ny_; ++i)
+        coefficients_[i] *= inverse_k2_[i];
+    if (field_model_ == ElectricFieldModel::FiniteDifference) {
+        // The finite-difference path only needs the transformed coefficients
+        // as the IDCT input.  Swap the buffers instead of copying 262k cells.
+        potential_.swap(coefficients_);
+    } else {
+        // Mixed-spectral gradients still consume coefficients_ below.
+        potential_ = coefficients_;
     }
-    const std::vector<Real> potential_coefficients = coefficients;
-    std::vector<Real> potential = potential_coefficients;
-    idct2_orthonormal(potential, nx_, ny_);
-    for (int i = 0; i < nx_ * ny_; ++i) result.energy += 0.5 * rho[i] * potential[i] * bin_area;
+    idct2_orthonormal(potential_, nx_, ny_);
+    Real energy = 0.0;
+    #pragma omp parallel for reduction(+:energy) schedule(static)
+    for (int i = 0; i < nx_ * ny_; ++i)
+        energy += 0.5 * rho_[i] * potential_[i] * bin_area;
+    result.energy = energy;
 
     if (!node_grad_x && !filler_grad_x) return result;
-    std::vector<Real> grad_phi_x(nx_ * ny_, 0.0);
-    std::vector<Real> grad_phi_y(nx_ * ny_, 0.0);
     if (field_model_ == ElectricFieldModel::MixedSpectral) {
-        grad_phi_x = potential_coefficients;
-        grad_phi_y = potential_coefficients;
+        grad_phi_x_ = coefficients_;
+        grad_phi_y_ = coefficients_;
         #pragma omp parallel for schedule(static)
         for (int y = 0; y < ny_; ++y) {
-            const Real ky = kPi * y / (yh_ - yl_);
             for (int x = 0; x < nx_; ++x) {
-                const Real kx = kPi * x / (xh_ - xl_);
                 const int index = y * nx_ + x;
-                grad_phi_x[index] *= -kx;
-                grad_phi_y[index] *= -ky;
+                grad_phi_x_[index] *= -kx_[x];
+                grad_phi_y_[index] *= -ky_[y];
             }
         }
-        inverse_mixed_sine_cosine2(grad_phi_x, nx_, ny_, true);
-        inverse_mixed_sine_cosine2(grad_phi_y, nx_, ny_, false);
+        inverse_mixed_sine_cosine2(grad_phi_x_, nx_, ny_, true);
+        inverse_mixed_sine_cosine2(grad_phi_y_, nx_, ny_, false);
     } else {
         #pragma omp parallel for schedule(static)
         for (int y = 0; y < ny_; ++y) {
@@ -253,41 +300,41 @@ DensityResult ElectricDensity::compute(
                 const int xp = std::min(nx_ - 1, x + 1);
                 const int ym = std::max(0, y - 1);
                 const int yp = std::min(ny_ - 1, y + 1);
-                grad_phi_x[y * nx_ + x] =
-                    (potential[y * nx_ + xp] - potential[y * nx_ + xm]) /
+                grad_phi_x_[y * nx_ + x] =
+                    (potential_[y * nx_ + xp] - potential_[y * nx_ + xm]) /
                     ((xp - xm) * bin_w_);
-                grad_phi_y[y * nx_ + x] =
-                    (potential[yp * nx_ + x] - potential[ym * nx_ + x]) /
+                grad_phi_y_[y * nx_ + x] =
+                    (potential_[yp * nx_ + x] - potential_[ym * nx_ + x]) /
                     ((yp - ym) * bin_h_);
             }
         }
     }
     if (node_grad_x) node_grad_x->assign(db.nodes.size(), 0.0);
     if (node_grad_y) node_grad_y->assign(db.nodes.size(), 0.0);
-    #pragma omp parallel for schedule(dynamic, 256)
+    #pragma omp parallel for schedule(static)
     for (int m = 0; m < static_cast<int>(db.movable_ids.size()); ++m) {
         const int id = db.movable_ids[m];
         const Node& node = db.nodes[id];
-        const Real width = std::max(node.width, sqrt2 * bin_w_);
-        const Real height = std::max(node.height, sqrt2 * bin_h_);
-        const Real ratio = node.area() / (width * height);
+        const Real width = movable_effective_width_[m];
+        const Real height = movable_effective_height_[m];
+        const Real ratio = movable_charge_ratio_[m];
         Real gx = 0.0, gy = 0.0;
         gather_gradient(node.x, node.y, width, height, ratio,
-                        grad_phi_x, grad_phi_y, gx, gy);
+                        grad_phi_x_, grad_phi_y_, gx, gy);
         if (node_grad_x) (*node_grad_x)[id] = gx;
         if (node_grad_y) (*node_grad_y)[id] = gy;
     }
     if (filler_grad_x) filler_grad_x->assign(fillers.size(), 0.0);
     if (filler_grad_y) filler_grad_y->assign(fillers.size(), 0.0);
-    #pragma omp parallel for schedule(dynamic, 256)
+    #pragma omp parallel for schedule(static)
     for (int i = 0; i < static_cast<int>(fillers.size()); ++i) {
         const Filler& filler = fillers[i];
-        const Real width = std::max(filler.width, sqrt2 * bin_w_);
-        const Real height = std::max(filler.height, sqrt2 * bin_h_);
-        const Real ratio = filler.width * filler.height / (width * height);
+        const Real width = filler_effective_width_[i];
+        const Real height = filler_effective_height_[i];
+        const Real ratio = filler_charge_ratio_[i];
         Real gx = 0.0, gy = 0.0;
         gather_gradient(filler.x, filler.y, width, height, ratio,
-                        grad_phi_x, grad_phi_y, gx, gy);
+                        grad_phi_x_, grad_phi_y_, gx, gy);
         if (filler_grad_x) (*filler_grad_x)[i] = gx;
         if (filler_grad_y) (*filler_grad_y)[i] = gy;
     }
@@ -295,14 +342,17 @@ DensityResult ElectricDensity::compute(
 }
 
 void clamp_to_region(Database& db, std::vector<Filler>& fillers) {
-    for (int id : db.movable_ids) {
-        Node& node = db.nodes[id];
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < static_cast<int>(db.movable_ids.size()); ++i) {
+        Node& node = db.nodes[db.movable_ids[i]];
         node.x = std::clamp(node.x, db.xl + 0.5 * node.width,
                             db.xh - 0.5 * node.width);
         node.y = std::clamp(node.y, db.yl + 0.5 * node.height,
                             db.yh - 0.5 * node.height);
     }
-    for (Filler& filler : fillers) {
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < static_cast<int>(fillers.size()); ++i) {
+        Filler& filler = fillers[i];
         filler.x = std::clamp(filler.x, db.xl + 0.5 * filler.width,
                               db.xh - 0.5 * filler.width);
         filler.y = std::clamp(filler.y, db.yl + 0.5 * filler.height,
