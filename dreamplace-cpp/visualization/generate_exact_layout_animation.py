@@ -329,8 +329,8 @@ def main():
         "--all-cells", action="store_true",
         help="draw every movable cell instead of deterministic display sampling")
     parser.add_argument(
-        "--max-display-cells", type=int, default=12000,
-        help="maximum movable cells to draw when sampling (default: 12000)")
+        "--max-display-cells", type=int, default=50000,
+        help="maximum movable cells to draw when sampling (default: 50000)")
     args = parser.parse_args()
     if args.max_display_cells <= 0:
         parser.error("--max-display-cells must be positive")
