@@ -105,7 +105,8 @@ def read_summary(path: Path):
 
 
 def render(raw_base: Path, run_dir: Path, output: Path, still: Path, fps: int,
-           all_cells: bool):
+           all_cells: bool, max_display_cells: int):
+    dataset_name = raw_base.name
     nodes_path = raw_base.with_suffix(".nodes")
     widths, heights, fixed_map = read_nodes(nodes_path)
     names = list(widths)
@@ -113,8 +114,10 @@ def render(raw_base: Path, run_dir: Path, output: Path, still: Path, fps: int,
     _NODE_INDEX = {name: i for i, name in enumerate(names)}
     movable_names = [name for name in names if not fixed_map[name]]
     fixed_names = [name for name in names if fixed_map[name]]
-    movable_idx = [names.index(name) for name in movable_names]
-    display_stride = 1 if all_cells else max(1, len(movable_idx) // 60000)
+    movable_idx = [_NODE_INDEX[name] for name in movable_names]
+    display_stride = (1 if all_cells else
+                      max(1, int(np.ceil(len(movable_idx) /
+                                         max_display_cells))))
     display_idx = movable_idx[::display_stride]
     point_size = 0.18 if all_cells else 0.32
     point_alpha = 0.42 if all_cells else 0.56
@@ -146,7 +149,8 @@ def render(raw_base: Path, run_dir: Path, output: Path, still: Path, fps: int,
     global_frames = []
     for path in global_paths:
         match = re.search(r"global_(\d{4})", path.name)
-        iteration = int(match.group(1)) if match else 799
+        iteration = (int(match.group(1)) if match else
+                     int(summary["selected_legal_iteration"]))
         if path.name == "global_selected.pl":
             hpwl = float(summary["gp_hpwl"])
             overflow = float(summary["gp_overflow"])
@@ -161,6 +165,7 @@ def render(raw_base: Path, run_dir: Path, output: Path, still: Path, fps: int,
         global_frames.append((path, label, hpwl, overflow, lambda_value, None,
                               iteration))
 
+    final_iteration = int(metrics[-1]["iteration"])
     stage_frames = []
     for path, name in zip(stage_paths, stage_names):
         stage_label = f"Legalization: {name.replace('_', ' ').title()}"
@@ -169,12 +174,31 @@ def render(raw_base: Path, run_dir: Path, output: Path, still: Path, fps: int,
         stage_frames.append((path, stage_label, 0.0,
                              float(summary["gp_overflow"]),
                              float(metrics[-1]["lambda_effective"]),
-                             stage_names.index(name), 799))
+                             stage_names.index(name), final_iteration))
 
     frames = global_frames + stage_frames
     positions = [read_pl(path, names, widths, heights) for path, *_ in frames]
-    nets = read_nets(raw_base.with_suffix(".nets"))
-    stage_values = [exact_hpwl(pos, nets) / 1e6 for pos in positions[-len(stage_paths):]]
+    # Most legalization-stage HPWL values are already emitted by the solver.
+    # Only the adjacent-swap stage lacks a dedicated summary field, so avoid
+    # recomputing exact HPWL for all six large placements in Python.
+    stage_summary_keys = {
+        "greedy": "greedy_hpwl",
+        "abacus": "abacus_hpwl",
+        "k_reorder": "k_reorder_hpwl",
+        "global_swap": "global_swap_hpwl",
+        "independent_set": "independent_set_hpwl",
+    }
+    stage_values = []
+    nets = None
+    for stage_offset, name in enumerate(stage_names):
+        summary_key = stage_summary_keys.get(name)
+        if summary_key is not None:
+            stage_values.append(float(summary[summary_key]) / 1e6)
+            continue
+        if nets is None:
+            nets = read_nets(raw_base.with_suffix(".nets"))
+        position_offset = len(global_frames) + stage_offset
+        stage_values.append(exact_hpwl(positions[position_offset], nets) / 1e6)
     for i, value in enumerate(stage_values):
         path, label, _, overflow_value, lambda_value, stage_index, iteration = frames[len(global_frames) + i]
         frames[len(global_frames) + i] = (path, label, value * 1e6,
@@ -211,8 +235,8 @@ def render(raw_base: Path, run_dir: Path, output: Path, still: Path, fps: int,
     ax_hpwl.set_title("Convergence")
     ax_overflow.set_title("Density constraint")
     ax_stage.set_title("Legalization HPWL (M)")
-    ax_hpwl.set_xlim(0, 800)
-    ax_overflow.set_xlim(0, 800)
+    ax_hpwl.set_xlim(0, final_iteration)
+    ax_overflow.set_xlim(0, final_iteration)
     cursor_hpwl = ax_hpwl.axvline(0, color="#333333", lw=1.0)
     cursor_overflow = ax_overflow.axvline(0, color="#333333", lw=1.0)
 
@@ -271,7 +295,7 @@ def render(raw_base: Path, run_dir: Path, output: Path, still: Path, fps: int,
             bar.set_color(color)
         status = " | LEGAL" if stage_index == len(stage_names) - 1 else ""
         figure_title.set_text(
-            f"adaptec1 | exact nonsmooth HPWL + electrostatic density | "
+            f"{dataset_name} | exact nonsmooth HPWL + electrostatic density | "
             f"HPWL {frame_hpwl / 1e6:.3f}M | overflow {frame_overflow * 100:.3f}% | "
             f"lambda {frame_lambda:.3e}{status}")
 
@@ -304,9 +328,14 @@ def main():
     parser.add_argument(
         "--all-cells", action="store_true",
         help="draw every movable cell instead of deterministic display sampling")
+    parser.add_argument(
+        "--max-display-cells", type=int, default=12000,
+        help="maximum movable cells to draw when sampling (default: 12000)")
     args = parser.parse_args()
+    if args.max_display_cells <= 0:
+        parser.error("--max-display-cells must be positive")
     render(args.raw_base, args.run_dir, args.output, args.still, args.fps,
-           args.all_cells)
+           args.all_cells, args.max_display_cells)
 
 
 if __name__ == "__main__":
