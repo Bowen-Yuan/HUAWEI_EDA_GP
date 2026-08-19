@@ -106,7 +106,9 @@ void usage() {
         << "  --refine-active-set-min-radius X  post-feasible small-net epsilon floor\n"
         << "  --refine-active-set-small-span-threshold X  post-feasible small-net threshold\n"
         << "  --epsilon-continuation-iterations N  appended fixed-to-relative epsilon steps\n"
+        << "  --epsilon-continuation-start-iteration N  enter stage 2 before the base budget\n"
         << "  --epsilon-continuation-span-ratio X  final per-net/axis span fraction\n"
+        << "  --epsilon-continuation-to-zero  continuously reduce epsilon to exact subgradient\n"
         << "  --epsilon-continuation-min-radius X  optional final small-net radius floor\n"
         << "  --epsilon-continuation-small-span-threshold X  spans allowed to use the floor\n"
         << "  --epsilon-continuation-lr-scale X  continuation LR relative to fixed phase\n"
@@ -281,7 +283,9 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--refine-active-set-min-radius") options.gp.refinement_active_set_min_radius = std::stod(require_value(i, argc, argv));
         else if (arg == "--refine-active-set-small-span-threshold") options.gp.refinement_active_set_small_span_threshold = std::stod(require_value(i, argc, argv));
         else if (arg == "--epsilon-continuation-iterations") options.gp.epsilon_continuation_iterations = std::stoi(require_value(i, argc, argv));
+        else if (arg == "--epsilon-continuation-start-iteration") options.gp.epsilon_continuation_start_iteration = std::stoi(require_value(i, argc, argv));
         else if (arg == "--epsilon-continuation-span-ratio") options.gp.epsilon_continuation_span_ratio = std::stod(require_value(i, argc, argv));
+        else if (arg == "--epsilon-continuation-to-zero") options.gp.epsilon_continuation_to_zero = true;
         else if (arg == "--epsilon-continuation-min-radius") options.gp.epsilon_continuation_min_radius = std::stod(require_value(i, argc, argv));
         else if (arg == "--epsilon-continuation-small-span-threshold") options.gp.epsilon_continuation_small_span_threshold = std::stod(require_value(i, argc, argv));
         else if (arg == "--epsilon-continuation-lr-scale") options.gp.epsilon_continuation_learning_rate_scale = std::stod(require_value(i, argc, argv));
@@ -409,9 +413,13 @@ Options parse_options(int argc, char** argv) {
          options.gp.active_set_small_span_threshold < 0.0 ||
          options.gp.refinement_active_set_min_radius < -1.0 ||
          options.gp.refinement_active_set_small_span_threshold < -1.0 ||
+         options.gp.epsilon_continuation_start_iteration < -1 ||
+         options.gp.epsilon_continuation_start_iteration > options.gp.iterations ||
          options.gp.epsilon_continuation_iterations < 0 ||
-         options.gp.epsilon_continuation_span_ratio <= 0.0 ||
+         options.gp.epsilon_continuation_span_ratio < 0.0 ||
          options.gp.epsilon_continuation_span_ratio > 1.0 ||
+         (!options.gp.epsilon_continuation_to_zero &&
+          options.gp.epsilon_continuation_span_ratio <= 0.0) ||
          options.gp.epsilon_continuation_min_radius < 0.0 ||
          options.gp.epsilon_continuation_small_span_threshold < 0.0 ||
          options.gp.epsilon_continuation_learning_rate_scale <= 0.0 ||
@@ -529,10 +537,14 @@ void write_summary(const fs::path& path, const Database& db,
         << options.gp.refinement_active_set_min_radius << '\n';
     out << "refinement_active_set_small_span_threshold="
         << options.gp.refinement_active_set_small_span_threshold << '\n';
+    out << "epsilon_continuation_start_iteration="
+        << options.gp.epsilon_continuation_start_iteration << '\n';
     out << "epsilon_continuation_iterations="
         << options.gp.epsilon_continuation_iterations << '\n';
     out << "epsilon_continuation_span_ratio="
         << options.gp.epsilon_continuation_span_ratio << '\n';
+    out << "epsilon_continuation_to_zero="
+        << (options.gp.epsilon_continuation_to_zero ? "true" : "false") << '\n';
     out << "epsilon_continuation_min_radius="
         << options.gp.epsilon_continuation_min_radius << '\n';
     out << "epsilon_continuation_small_span_threshold="

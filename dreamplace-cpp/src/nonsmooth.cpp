@@ -654,7 +654,9 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
     std::vector<Real> best_progressive;
     Metrics best_progressive_metrics;
     Real best_progressive_score = std::numeric_limits<Real>::infinity();
-    const int continuation_end = config.iterations +
+    const int fixed_epsilon_end = config.epsilon_continuation_start_iteration >= 0
+        ? config.epsilon_continuation_start_iteration : config.iterations;
+    const int continuation_end = fixed_epsilon_end +
         config.epsilon_continuation_iterations;
     const int total_iterations = continuation_end +
         config.exact_subgradient_iterations;
@@ -662,7 +664,7 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
 
     for (int iteration = 0; iteration < total_iterations; ++iteration) {
         const auto profile_iteration_start = std::chrono::steady_clock::now();
-        const int epsilon_stage = iteration < config.iterations ? 1
+        const int epsilon_stage = iteration < fixed_epsilon_end ? 1
             : iteration < continuation_end ? 2 : 3;
         if (epsilon_stage != previous_epsilon_stage) {
             // Continue from the reported fixed-stage checkpoint, not from a
@@ -691,7 +693,7 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
             previous_epsilon_stage = epsilon_stage;
         }
         const int continuation_age = epsilon_stage == 2
-            ? iteration - config.iterations : 0;
+            ? iteration - fixed_epsilon_end : 0;
         const Real continuation_theta = epsilon_stage < 2 ? 0.0
             : epsilon_stage > 2 ? 1.0
             : config.epsilon_continuation_iterations <= 1 ? 1.0
@@ -803,13 +805,17 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
             if (config.adaptive_active_set && active_radius > 0.0) {
                 active_radius *= active_radius_scale;
             }
+            if (epsilon_stage == 2 && config.epsilon_continuation_to_zero) {
+                active_radius *= std::max<Real>(0.0, 1.0 - continuation_theta);
+            }
             if (epsilon_stage == 3) active_radius = 0.0;
             current_active_radius = active_radius;
             const Real legacy_span_ratio = config.active_set_span_ratio > 0.0
                 ? config.active_set_span_ratio
                 : config.adaptive_active_predictive
                     ? config.adaptive_active_set_span_cap : 0.0;
-            const Real active_span_ratio = epsilon_stage == 2
+            const Real active_span_ratio = epsilon_stage == 2 &&
+                    !config.epsilon_continuation_to_zero
                 ? config.epsilon_continuation_span_ratio : legacy_span_ratio;
             const Real legacy_min_radius = refinement_active &&
                     config.refinement_active_set_min_radius >= 0.0

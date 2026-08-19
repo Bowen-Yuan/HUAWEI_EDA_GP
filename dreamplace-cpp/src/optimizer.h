@@ -99,8 +99,10 @@ struct GlobalPlaceConfig {
     Real refinement_active_set_small_span_threshold = -1.0;
     // Opt-in exact-HPWL continuation.  The original iteration budget remains
     // the unchanged fixed-epsilon phase; these iterations are appended.
+    int epsilon_continuation_start_iteration = -1;
     int epsilon_continuation_iterations = 0;
     Real epsilon_continuation_span_ratio = 0.15;
+    bool epsilon_continuation_to_zero = false;
     Real epsilon_continuation_min_radius = 0.0;
     Real epsilon_continuation_small_span_threshold = 0.0;
     Real epsilon_continuation_learning_rate_scale = 1.0;
