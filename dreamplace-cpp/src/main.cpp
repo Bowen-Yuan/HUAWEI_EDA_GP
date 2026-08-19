@@ -53,6 +53,7 @@ void usage() {
         << "  --smooth-hpwl        weighted-average HPWL objective (default)\n"
         << "  --optimizer NAME     dreamplace|heavy-ball|adam|amsgrad|adagrad\n"
         << "  --lambda-policy NAME dreamplace|trajectory|ratio\n"
+        << "  --density-weight-scale X  initial wire/density gradient balance\n"
         << "  --hpwl-only N        exact-HPWL iterations before density activation\n"
         << "  --step-fraction X    nonsmooth density-stage step / region perimeter\n"
         << "  --hpwl-step-fraction X  nonsmooth HPWL-only step / region perimeter\n"
@@ -99,6 +100,22 @@ void usage() {
         << "  --refine-gradient-radius X  post-feasible sampling radius\n"
         << "  --active-set-radius X  epsilon-active exact-HPWL trial direction radius\n"
         << "  --active-set-power X  epsilon-active triangular weight exponent\n"
+        << "  --active-set-span-ratio X  cap per-net x/y epsilon by this span fraction\n"
+        << "  --active-set-min-radius X  epsilon floor for explicitly small net spans\n"
+        << "  --active-set-small-span-threshold X  span below which the floor is allowed\n"
+        << "  --refine-active-set-min-radius X  post-feasible small-net epsilon floor\n"
+        << "  --refine-active-set-small-span-threshold X  post-feasible small-net threshold\n"
+        << "  --epsilon-continuation-iterations N  appended fixed-to-relative epsilon steps\n"
+        << "  --epsilon-continuation-span-ratio X  final per-net/axis span fraction\n"
+        << "  --epsilon-continuation-min-radius X  optional final small-net radius floor\n"
+        << "  --epsilon-continuation-small-span-threshold X  spans allowed to use the floor\n"
+        << "  --epsilon-continuation-lr-scale X  continuation LR relative to fixed phase\n"
+        << "  --epsilon-continuation-optimizer NAME  heavy-ball|adam|amsgrad|adagrad\n"
+        << "  --epsilon-continuation-legal-interval N  legal checkpoint interval after stage 1\n"
+        << "  --exact-subgradient-iterations N  appended radius-zero feasible steps\n"
+        << "  --exact-subgradient-lr-scale X  radius-zero LR relative to continuation\n"
+        << "  --exact-subgradient-optimizer NAME  heavy-ball|adam|amsgrad|adagrad\n"
+        << "  --exact-subgradient-filter-backtracks N  exact feasible-filter limit\n"
         << "  --adaptive-active-set  enable legacy radius controller\n"
         << "  --adaptive-active-smart  enable windowed HPWL/overflow radius controller\n"
         << "  --adaptive-active-predictive  enable phase-aware predictive radius controller\n"
@@ -235,6 +252,7 @@ Options parse_options(int argc, char** argv) {
             else if (value == "adagrad") options.gp.refinement_optimizer = GlobalOptimizer::AdaGrad;
             else throw std::runtime_error("unknown refinement optimizer: " + value);
         }
+        else if (arg == "--density-weight-scale") options.gp.density_weight_scale = std::stod(require_value(i, argc, argv));
         else if (arg == "--refine-active-set-radius") options.gp.refinement_active_set_radius = std::stod(require_value(i, argc, argv));
         else if (arg == "--refine-active-set-decay") options.gp.refinement_active_set_decay_iterations = std::stoi(require_value(i, argc, argv));
         else if (arg == "--tangent-refinement") options.gp.tangent_refinement = true;
@@ -257,6 +275,36 @@ Options parse_options(int argc, char** argv) {
         else if (arg == "--refine-gradient-radius") options.gp.refinement_gradient_sampling_radius = std::stod(require_value(i, argc, argv));
         else if (arg == "--active-set-radius") options.gp.active_set_radius = std::stod(require_value(i, argc, argv));
         else if (arg == "--active-set-power") options.gp.active_set_power = std::stod(require_value(i, argc, argv));
+        else if (arg == "--active-set-span-ratio") options.gp.active_set_span_ratio = std::stod(require_value(i, argc, argv));
+        else if (arg == "--active-set-min-radius") options.gp.active_set_min_radius = std::stod(require_value(i, argc, argv));
+        else if (arg == "--active-set-small-span-threshold") options.gp.active_set_small_span_threshold = std::stod(require_value(i, argc, argv));
+        else if (arg == "--refine-active-set-min-radius") options.gp.refinement_active_set_min_radius = std::stod(require_value(i, argc, argv));
+        else if (arg == "--refine-active-set-small-span-threshold") options.gp.refinement_active_set_small_span_threshold = std::stod(require_value(i, argc, argv));
+        else if (arg == "--epsilon-continuation-iterations") options.gp.epsilon_continuation_iterations = std::stoi(require_value(i, argc, argv));
+        else if (arg == "--epsilon-continuation-span-ratio") options.gp.epsilon_continuation_span_ratio = std::stod(require_value(i, argc, argv));
+        else if (arg == "--epsilon-continuation-min-radius") options.gp.epsilon_continuation_min_radius = std::stod(require_value(i, argc, argv));
+        else if (arg == "--epsilon-continuation-small-span-threshold") options.gp.epsilon_continuation_small_span_threshold = std::stod(require_value(i, argc, argv));
+        else if (arg == "--epsilon-continuation-lr-scale") options.gp.epsilon_continuation_learning_rate_scale = std::stod(require_value(i, argc, argv));
+        else if (arg == "--epsilon-continuation-optimizer") {
+            const std::string value = require_value(i, argc, argv);
+            if (value == "heavy-ball") options.gp.epsilon_continuation_optimizer = GlobalOptimizer::HeavyBall;
+            else if (value == "adam") options.gp.epsilon_continuation_optimizer = GlobalOptimizer::Adam;
+            else if (value == "amsgrad") options.gp.epsilon_continuation_optimizer = GlobalOptimizer::AMSGrad;
+            else if (value == "adagrad") options.gp.epsilon_continuation_optimizer = GlobalOptimizer::AdaGrad;
+            else throw std::runtime_error("unknown epsilon-continuation optimizer: " + value);
+        }
+        else if (arg == "--epsilon-continuation-legal-interval") options.gp.epsilon_continuation_legal_checkpoint_interval = std::stoi(require_value(i, argc, argv));
+        else if (arg == "--exact-subgradient-iterations") options.gp.exact_subgradient_iterations = std::stoi(require_value(i, argc, argv));
+        else if (arg == "--exact-subgradient-lr-scale") options.gp.exact_subgradient_learning_rate_scale = std::stod(require_value(i, argc, argv));
+        else if (arg == "--exact-subgradient-optimizer") {
+            const std::string value = require_value(i, argc, argv);
+            if (value == "heavy-ball") options.gp.exact_subgradient_optimizer = GlobalOptimizer::HeavyBall;
+            else if (value == "adam") options.gp.exact_subgradient_optimizer = GlobalOptimizer::Adam;
+            else if (value == "amsgrad") options.gp.exact_subgradient_optimizer = GlobalOptimizer::AMSGrad;
+            else if (value == "adagrad") options.gp.exact_subgradient_optimizer = GlobalOptimizer::AdaGrad;
+            else throw std::runtime_error("unknown exact-subgradient optimizer: " + value);
+        }
+        else if (arg == "--exact-subgradient-filter-backtracks") options.gp.exact_subgradient_filter_backtracks = std::stoi(require_value(i, argc, argv));
         else if (arg == "--adaptive-active-set") options.gp.adaptive_active_set = true;
         else if (arg == "--adaptive-active-smart") {
             options.gp.adaptive_active_set = true;
@@ -333,7 +381,8 @@ Options parse_options(int argc, char** argv) {
         throw std::runtime_error("nonsmooth step fractions must be positive");
     if (options.gp.bundle_current_mix < 0.0 || options.gp.bundle_current_mix > 1.0)
         throw std::runtime_error("bundle current mix must lie in [0,1]");
-    if (options.gp.lambda_control_min <= 0.0 ||
+    if (options.gp.density_weight_scale <= 0.0 ||
+        options.gp.lambda_control_min <= 0.0 ||
         options.gp.lambda_control_max < options.gp.lambda_control_min)
         throw std::runtime_error("lambda control bounds are invalid");
     if (options.gp.refinement_lower_overflow < 0.0 ||
@@ -352,8 +401,24 @@ Options parse_options(int argc, char** argv) {
         options.gp.gradient_sampling_radius < 0.0 ||
         options.gp.refinement_gradient_sampling_samples < 0 ||
         options.gp.refinement_gradient_sampling_radius < 0.0 ||
-        options.gp.active_set_radius < 0.0 ||
-        options.gp.active_set_power <= 0.0 ||
+         options.gp.active_set_radius < 0.0 ||
+         options.gp.active_set_power <= 0.0 ||
+         options.gp.active_set_span_ratio < 0.0 ||
+         options.gp.active_set_span_ratio > 1.0 ||
+         options.gp.active_set_min_radius < 0.0 ||
+         options.gp.active_set_small_span_threshold < 0.0 ||
+         options.gp.refinement_active_set_min_radius < -1.0 ||
+         options.gp.refinement_active_set_small_span_threshold < -1.0 ||
+         options.gp.epsilon_continuation_iterations < 0 ||
+         options.gp.epsilon_continuation_span_ratio <= 0.0 ||
+         options.gp.epsilon_continuation_span_ratio > 1.0 ||
+         options.gp.epsilon_continuation_min_radius < 0.0 ||
+         options.gp.epsilon_continuation_small_span_threshold < 0.0 ||
+         options.gp.epsilon_continuation_learning_rate_scale <= 0.0 ||
+         options.gp.epsilon_continuation_legal_checkpoint_interval < 0 ||
+         options.gp.exact_subgradient_iterations < 0 ||
+         options.gp.exact_subgradient_learning_rate_scale <= 0.0 ||
+         options.gp.exact_subgradient_filter_backtracks < 0 ||
         options.gp.primal_dual_step < 0.0 ||
         options.gp.refinement_active_set_radius < -1.0 ||
         options.gp.refinement_active_set_decay_iterations < 0 ||
@@ -432,6 +497,7 @@ void write_summary(const fs::path& path, const Database& db,
     out << "lambda_policy=" << lambda_policy_name(options.gp.lambda_policy) << '\n';
     out << "lambda_control_min=" << options.gp.lambda_control_min << '\n';
     out << "lambda_control_max=" << options.gp.lambda_control_max << '\n';
+    out << "density_weight_scale=" << options.gp.density_weight_scale << '\n';
     out << "hpwl_only_iterations=" << options.gp.hpwl_only_iterations << '\n';
     out << "bundle_hpwl=" << (options.gp.enable_bundle ? "true" : "false") << '\n';
     out << "bundle_groups=" << options.gp.bundle_groups << '\n';
@@ -455,6 +521,36 @@ void write_summary(const fs::path& path, const Database& db,
         << options.gp.refinement_gradient_sampling_radius << '\n';
     out << "active_set_radius=" << options.gp.active_set_radius << '\n';
     out << "active_set_power=" << options.gp.active_set_power << '\n';
+    out << "active_set_span_ratio=" << options.gp.active_set_span_ratio << '\n';
+    out << "active_set_min_radius=" << options.gp.active_set_min_radius << '\n';
+    out << "active_set_small_span_threshold="
+        << options.gp.active_set_small_span_threshold << '\n';
+    out << "refinement_active_set_min_radius="
+        << options.gp.refinement_active_set_min_radius << '\n';
+    out << "refinement_active_set_small_span_threshold="
+        << options.gp.refinement_active_set_small_span_threshold << '\n';
+    out << "epsilon_continuation_iterations="
+        << options.gp.epsilon_continuation_iterations << '\n';
+    out << "epsilon_continuation_span_ratio="
+        << options.gp.epsilon_continuation_span_ratio << '\n';
+    out << "epsilon_continuation_min_radius="
+        << options.gp.epsilon_continuation_min_radius << '\n';
+    out << "epsilon_continuation_small_span_threshold="
+        << options.gp.epsilon_continuation_small_span_threshold << '\n';
+    out << "epsilon_continuation_learning_rate_scale="
+        << options.gp.epsilon_continuation_learning_rate_scale << '\n';
+    out << "epsilon_continuation_optimizer="
+        << global_optimizer_name(options.gp.epsilon_continuation_optimizer) << '\n';
+    out << "epsilon_continuation_legal_checkpoint_interval="
+        << options.gp.epsilon_continuation_legal_checkpoint_interval << '\n';
+    out << "exact_subgradient_iterations="
+        << options.gp.exact_subgradient_iterations << '\n';
+    out << "exact_subgradient_learning_rate_scale="
+        << options.gp.exact_subgradient_learning_rate_scale << '\n';
+    out << "exact_subgradient_optimizer="
+        << global_optimizer_name(options.gp.exact_subgradient_optimizer) << '\n';
+    out << "exact_subgradient_filter_backtracks="
+        << options.gp.exact_subgradient_filter_backtracks << '\n';
     out << "adaptive_active_set=" << (options.gp.adaptive_active_set ? "true" : "false") << '\n';
     out << "adaptive_active_smart=" << (options.gp.adaptive_active_smart ? "true" : "false") << '\n';
     out << "adaptive_active_predictive=" << (options.gp.adaptive_active_predictive ? "true" : "false") << '\n';

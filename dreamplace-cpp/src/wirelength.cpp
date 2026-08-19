@@ -159,7 +159,10 @@ Real exact_hpwl_active_set_direction(const Database& db,
                                      Real power,
                                      std::vector<Real>* grad_x,
                                      std::vector<Real>* grad_y,
-                                     Real span_cap) {
+                                     Real span_cap,
+                                     Real small_span_min_radius,
+                                     Real small_span_threshold,
+                                     Real span_cap_blend) {
     if (radius <= 0.0)
         return exact_hpwl_subgradient(
             db, gradient_degree_limit, grad_x, grad_y);
@@ -203,12 +206,19 @@ Real exact_hpwl_active_set_direction(const Database& db,
             continue;
         }
 
-        const Real radius_x = span_cap > 0.0
-            ? std::min(radius, std::max<Real>(1.0e-12, span_cap * (max_x - min_x)))
-            : radius;
-        const Real radius_y = span_cap > 0.0
-            ? std::min(radius, std::max<Real>(1.0e-12, span_cap * (max_y - min_y)))
-            : radius;
+        const auto per_axis_radius = [&](Real span) {
+            if (span_cap <= 0.0) return radius;
+            Real local_radius = span_cap * span;
+            if (small_span_threshold > 0.0 && span < small_span_threshold) {
+                local_radius = std::max(local_radius, small_span_min_radius);
+            }
+            const Real relative_radius = std::min(
+                radius, std::max<Real>(1.0e-12, local_radius));
+            return (1.0 - span_cap_blend) * radius +
+                   span_cap_blend * relative_radius;
+        };
+        const Real radius_x = per_axis_radius(max_x - min_x);
+        const Real radius_y = per_axis_radius(max_y - min_y);
         Real min_x_weight = 0.0, max_x_weight = 0.0;
         Real min_y_weight = 0.0, max_y_weight = 0.0;
         for (std::size_t pin_index = offset; pin_index < end; ++pin_index) {

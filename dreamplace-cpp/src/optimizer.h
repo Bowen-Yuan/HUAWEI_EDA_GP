@@ -89,6 +89,27 @@ struct GlobalPlaceConfig {
     Real refinement_gradient_sampling_radius = 0.25;
     Real active_set_radius = 0.0;
     Real active_set_power = 2.0;
+    // Optional per-net, per-axis radius rule. When span_ratio is positive,
+    // epsilon is capped by span_ratio * net_span. Only spans below
+    // small_span_threshold may use the configured minimum radius.
+    Real active_set_span_ratio = 0.0;
+    Real active_set_min_radius = 0.0;
+    Real active_set_small_span_threshold = 0.0;
+    Real refinement_active_set_min_radius = -1.0;
+    Real refinement_active_set_small_span_threshold = -1.0;
+    // Opt-in exact-HPWL continuation.  The original iteration budget remains
+    // the unchanged fixed-epsilon phase; these iterations are appended.
+    int epsilon_continuation_iterations = 0;
+    Real epsilon_continuation_span_ratio = 0.15;
+    Real epsilon_continuation_min_radius = 0.0;
+    Real epsilon_continuation_small_span_threshold = 0.0;
+    Real epsilon_continuation_learning_rate_scale = 1.0;
+    GlobalOptimizer epsilon_continuation_optimizer = GlobalOptimizer::AMSGrad;
+    int epsilon_continuation_legal_checkpoint_interval = 0;
+    int exact_subgradient_iterations = 0;
+    Real exact_subgradient_learning_rate_scale = 0.20;
+    GlobalOptimizer exact_subgradient_optimizer = GlobalOptimizer::AdaGrad;
+    int exact_subgradient_filter_backtracks = 8;
     // Experimental, opt-in radius controller.  The legacy fixed-radius path
     // remains unchanged when this flag is false.
     bool adaptive_active_set = false;

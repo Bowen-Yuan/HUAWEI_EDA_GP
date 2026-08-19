@@ -1,0 +1,3 @@
+dataset,fixed_iterations,continuation_iterations,subgradient_iterations,continuation_optimizer,subgradient_optimizer,selected_iteration,gp_hpwl,gp_overflow,legal_hpwl,internal_legal,legal2_type0,legal2_type1,legal2_type2,legal2_type3,wall_seconds
+adaptec1,1400,200,100,Adam,AMSGrad,1300,72669854.6197,0.0698896809396,76998748,true,0,0,0,0,104.2192145
+adaptec2,1600,200,100,Adam,AMSGrad,1600,80029558.4089,0.069946791629,82681101,true,0,0,0,0,184.9013665

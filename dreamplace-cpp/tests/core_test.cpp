@@ -158,6 +158,45 @@ int main() {
     }
     {
         Database db;
+        db.nodes.resize(5);
+        const Real x[] = {0.0, 5.0, 30.0, 70.0, 100.0};
+        for (int i = 0; i < 5; ++i) {
+            db.nodes[i].id = i;
+            db.nodes[i].x = x[i];
+            db.nodes[i].y = 0.0;
+        }
+        Net net;
+        for (int i = 0; i < 5; ++i) net.pins.push_back({i, 0.0, 0.0});
+        db.nets.push_back(net);
+        std::vector<Real> gx, gy;
+        exact_hpwl_active_set_direction(
+            db, 100, 100.0, 4.0, &gx, &gy, 0.10, 0.0, 0.0);
+        require(std::abs(gx[2]) < 1.0e-12 && std::abs(gx[3]) < 1.0e-12,
+                "10% span cap must exclude non-boundary pins");
+        exact_hpwl_active_set_direction(
+            db, 100, 100.0, 4.0, &gx, &gy, 0.10, 0.0, 0.0, 0.0);
+        require(std::abs(gx[2]) > 1.0e-8,
+                "zero continuation blend must preserve the fixed radius");
+
+        Database small;
+        small.nodes.resize(3);
+        const Real small_x[] = {0.0, 1.0, 4.0};
+        for (int i = 0; i < 3; ++i) {
+            small.nodes[i].id = i;
+            small.nodes[i].x = small_x[i];
+            small.nodes[i].y = 0.0;
+        }
+        Net small_net;
+        for (int i = 0; i < 3; ++i)
+            small_net.pins.push_back({i, 0.0, 0.0});
+        small.nets.push_back(small_net);
+        exact_hpwl_active_set_direction(
+            small, 100, 100.0, 4.0, &gx, &gy, 0.10, 2.0, 10.0);
+        require(gx[1] < -1.0e-6,
+                "small-span epsilon floor must activate a nearby interior pin");
+    }
+    {
+        Database db;
         db.xl = 0.0; db.yl = 0.0; db.xh = 100.0; db.yh = 20.0;
         db.rows = {{0.0, 10.0, 1.0, 1.0, 0.0, 100},
                    {10.0, 10.0, 1.0, 1.0, 0.0, 100}};

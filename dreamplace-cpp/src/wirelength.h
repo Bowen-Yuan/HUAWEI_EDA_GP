@@ -16,7 +16,10 @@ Real exact_hpwl_active_set_direction(const Database& db,
                                      Real power,
                                      std::vector<Real>* grad_x,
                                      std::vector<Real>* grad_y,
-                                     Real span_cap = 0.0);
+                                     Real span_cap = 0.0,
+                                     Real small_span_min_radius = 0.0,
+                                     Real small_span_threshold = 0.0,
+                                     Real span_cap_blend = 1.0);
 Real exact_hpwl_primal_dual_direction(const Database& db,
                                       int gradient_degree_limit,
                                       Real dual_step,

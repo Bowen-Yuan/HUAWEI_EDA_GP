@@ -588,7 +588,8 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
                    "bundle_cuts,bundle_newest_weight,bundle_model_error,bundle_cosine,"
                    "refinement,optimizer,grid_x,grid_y,row_distance,segment_overflow,"
                    "quick_legal_hpwl,serious_step,active_radius_scale,active_radius,"
-                   "adaptive_signal,adaptive_phase";
+                   "adaptive_signal,adaptive_phase,epsilon_stage,continuation_theta,"
+                   "effective_span_ratio,previous_exact_filter_fraction";
         if (config.progressive_legalization) {
             metrics << ",stage,obstacle_energy,obstacle_weight,macro_overlap_area,"
                        "macro_overlap_ratio,macro_overlap_cells,"
@@ -640,6 +641,7 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
     Real obstacle_weight_base = 0.0;
     int previous_stage = 0;
     Real last_filter_fraction = 1.0;
+    Real last_exact_filter_fraction = 1.0;
     GlobalPlaceResult result;
     double profile_density = 0.0, profile_wire = 0.0;
     double profile_update = 0.0;
@@ -652,9 +654,49 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
     std::vector<Real> best_progressive;
     Metrics best_progressive_metrics;
     Real best_progressive_score = std::numeric_limits<Real>::infinity();
+    const int continuation_end = config.iterations +
+        config.epsilon_continuation_iterations;
+    const int total_iterations = continuation_end +
+        config.exact_subgradient_iterations;
+    int previous_epsilon_stage = 1;
 
-    for (int iteration = 0; iteration < config.iterations; ++iteration) {
+    for (int iteration = 0; iteration < total_iterations; ++iteration) {
         const auto profile_iteration_start = std::chrono::steady_clock::now();
+        const int epsilon_stage = iteration < config.iterations ? 1
+            : iteration < continuation_end ? 2 : 3;
+        if (epsilon_stage != previous_epsilon_stage) {
+            // Continue from the reported fixed-stage checkpoint, not from a
+            // potentially worse final iterate.  The global best remains in
+            // force, so an experimental stage can never degrade the result.
+            if (result.have_feasible && !best_feasible.empty()) {
+                apply(db, fillers, best_feasible);
+                previous_hpwl = result.best_feasible_metrics.exact_hpwl;
+                previous_overflow = result.best_feasible_metrics.overflow;
+                refinement_active = true;
+            }
+            refinement_start = iteration;
+            std::fill(first.begin(), first.end(), 0.0);
+            std::fill(second.begin(), second.end(), 0.0);
+            std::fill(maximum_second.begin(), maximum_second.end(), 0.0);
+            clear_bundle_models();
+            adaptive_hpwl_history.clear();
+            adaptive_overflow_history.clear();
+            active_radius_scale = 1.0;
+            adaptive_signal_ema = 0.0;
+            last_exact_filter_fraction = 1.0;
+            std::cout << "[EpsilonContinuation] stage=" << epsilon_stage
+                      << " iter=" << iteration
+                      << " restored_feasible=" << (result.have_feasible ? 1 : 0)
+                      << '\n';
+            previous_epsilon_stage = epsilon_stage;
+        }
+        const int continuation_age = epsilon_stage == 2
+            ? iteration - config.iterations : 0;
+        const Real continuation_theta = epsilon_stage < 2 ? 0.0
+            : epsilon_stage > 2 ? 1.0
+            : config.epsilon_continuation_iterations <= 1 ? 1.0
+            : continuation_age / static_cast<Real>(
+                config.epsilon_continuation_iterations - 1);
         const int obstacle_start = config.hpwl_only_iterations +
             config.progressive_density_iterations;
         const int stage = !config.progressive_legalization
@@ -731,6 +773,7 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
         std::vector<std::vector<Real>> group_gx, group_gy;
         Real hpwl = 0.0;
         Real current_active_radius = 0.0;
+        Real current_effective_span_ratio = 0.0;
         const bool grouped_bundle = config.enable_bundle && config.bundle_groups > 1;
         const auto profile_wire_start = std::chrono::steady_clock::now();
         if (grouped_bundle) {
@@ -760,8 +803,31 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
             if (config.adaptive_active_set && active_radius > 0.0) {
                 active_radius *= active_radius_scale;
             }
+            if (epsilon_stage == 3) active_radius = 0.0;
             current_active_radius = active_radius;
-            hpwl = config.primal_dual_step > 0.0
+            const Real legacy_span_ratio = config.active_set_span_ratio > 0.0
+                ? config.active_set_span_ratio
+                : config.adaptive_active_predictive
+                    ? config.adaptive_active_set_span_cap : 0.0;
+            const Real active_span_ratio = epsilon_stage == 2
+                ? config.epsilon_continuation_span_ratio : legacy_span_ratio;
+            const Real legacy_min_radius = refinement_active &&
+                    config.refinement_active_set_min_radius >= 0.0
+                ? config.refinement_active_set_min_radius
+                : config.active_set_min_radius;
+            const Real active_min_radius = epsilon_stage == 2
+                ? config.epsilon_continuation_min_radius : legacy_min_radius;
+            const Real legacy_small_span_threshold = refinement_active &&
+                    config.refinement_active_set_small_span_threshold >= 0.0
+                ? config.refinement_active_set_small_span_threshold
+                : config.active_set_small_span_threshold;
+            const Real active_small_span_threshold = epsilon_stage == 2
+                ? config.epsilon_continuation_small_span_threshold
+                : legacy_small_span_threshold;
+            const Real span_cap_blend = epsilon_stage == 2
+                ? continuation_theta : 1.0;
+            current_effective_span_ratio = active_span_ratio * span_cap_blend;
+            hpwl = config.primal_dual_step > 0.0 && epsilon_stage != 3
                 ? exact_hpwl_primal_dual_direction(
                       db, config.degree_limit, config.primal_dual_step,
                       &wgx, &wgy)
@@ -770,8 +836,10 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
                       db, config.degree_limit, active_radius,
                       config.active_set_power,
                       &wgx, &wgy,
-                      config.adaptive_active_predictive
-                          ? config.adaptive_active_set_span_cap : 0.0)
+                      active_span_ratio,
+                      active_min_radius,
+                      active_small_span_threshold,
+                      span_cap_blend)
                 : exact_hpwl_subgradient(
                       db, config.degree_limit, &wgx, &wgy);
         }
@@ -847,12 +915,26 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
         const Real lambda = density_active ? lambda_base * lambda_control : 0.0;
         if (density_active && d.overflow <= config.bundle_start_overflow)
             add_row_proximity_force(db, config.legal_row_force, wgy);
-        const Real progress = iteration / static_cast<Real>(std::max(1, config.iterations));
+        const Real progress = std::min<Real>(
+            1.0, iteration / static_cast<Real>(std::max(1, config.iterations)));
         const Real fraction = density_active ? config.nonsmooth_step_fraction
                                              : config.nonsmooth_hpwl_step_fraction;
         Real learning_rate = fraction * ((db.xh - db.xl) + (db.yh - db.yl)) /
                              std::sqrt(1.0 + 4.0 * progress);
         if (refinement_active) learning_rate *= config.refinement_learning_rate_scale;
+        if (epsilon_stage == 2) {
+            const Real local_progress = continuation_age / static_cast<Real>(
+                std::max(1, config.epsilon_continuation_iterations));
+            learning_rate *= config.epsilon_continuation_learning_rate_scale /
+                std::sqrt(1.0 + 4.0 * local_progress);
+        } else if (epsilon_stage == 3) {
+            const int subgradient_age = iteration - continuation_end;
+            const Real local_progress = subgradient_age / static_cast<Real>(
+                std::max(1, config.exact_subgradient_iterations));
+            learning_rate *= config.epsilon_continuation_learning_rate_scale *
+                config.exact_subgradient_learning_rate_scale /
+                std::sqrt(1.0 + 4.0 * local_progress);
+        }
         if (refinement_active && config.tangent_refinement)
             learning_rate *= tangent_trial_scale;
         const int transition_age = iteration - last_grid_transition;
@@ -860,8 +942,10 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
             learning_rate *= 0.10 + 0.90 * (transition_age + 1) / 25.0;
         }
         if (config.serious_bundle) learning_rate *= serious_trial_scale;
-        const GlobalOptimizer active_optimizer = refinement_active
-            ? config.refinement_optimizer : config.optimizer;
+        const GlobalOptimizer active_optimizer = epsilon_stage == 2
+            ? config.epsilon_continuation_optimizer
+            : epsilon_stage == 3 ? config.exact_subgradient_optimizer
+            : refinement_active ? config.refinement_optimizer : config.optimizer;
         BundleStats bundle_stats;
         if (config.enable_bundle && density_active && d.overflow <= config.bundle_start_overflow) {
             if (grouped_bundle) {
@@ -931,9 +1015,13 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
         }
         Real quick_legal_hpwl = 0.0;
         bool projection_applied = false;
+        const int active_checkpoint_interval = epsilon_stage > 1 &&
+                config.epsilon_continuation_legal_checkpoint_interval > 0
+            ? config.epsilon_continuation_legal_checkpoint_interval
+            : config.legal_checkpoint_interval;
         const bool checkpoint_due = config.legal_checkpoint_selection &&
             d.overflow <= config.stop_overflow &&
-            iteration % config.legal_checkpoint_interval == 0;
+            iteration % active_checkpoint_interval == 0;
         const bool projection_due = config.late_legal_projection &&
             d.overflow <= config.bundle_start_overflow &&
             iteration % config.legal_projection_interval == 0;
@@ -1033,7 +1121,10 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
                     << legal_proxy.segment_overflow << ','
                     << quick_legal_hpwl << ',' << last_serious_step << ','
                     << active_radius_scale << ',' << current_active_radius << ','
-                    << adaptive_signal_ema << ',' << adaptive_phase;
+                    << adaptive_signal_ema << ',' << adaptive_phase << ','
+                    << epsilon_stage << ',' << continuation_theta << ','
+                    << current_effective_span_ratio << ','
+                    << last_exact_filter_fraction;
             if (config.progressive_legalization) {
                 metrics << ',' << stage << ',' << obstacle.energy << ','
                         << obstacle_weight << ',' << obstacle.overlap_area << ','
@@ -1042,13 +1133,15 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
             }
             metrics << '\n';
         }
-        if (iteration % config.log_every == 0 || iteration + 1 == config.iterations) {
+        if (iteration % config.log_every == 0 || iteration + 1 == total_iterations) {
             std::cout << "[Exact] iter=" << iteration << " hpwl=" << hpwl
                       << " overflow=" << d.overflow << " eta=" << lambda_control
                       << " lambda=" << lambda << " lr=" << learning_rate
                       << " cuts=" << bundle_stats.cuts
                       << " grid=" << density->bins_x() << 'x' << density->bins_y()
                       << " refine=" << (refinement_active ? 1 : 0)
+                      << " epsilon_stage=" << epsilon_stage
+                      << " epsilon_theta=" << continuation_theta
                       << " stage=" << stage
                       << " macro_overlap=" << obstacle.overlap_ratio
                       << " macro_cells=" << obstacle.overlapping_cells << '\n';
@@ -1061,7 +1154,7 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
         }
 
         std::fill(gradient.begin(), gradient.end(), 0.0);
-        if (refinement_active && config.tangent_refinement) {
+        if (refinement_active && config.tangent_refinement && epsilon_stage != 3) {
             std::fill(wire_gradient_refinement.begin(),
                       wire_gradient_refinement.end(), 0.0);
             std::fill(density_normal_refinement.begin(),
@@ -1122,12 +1215,13 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
             for (int i = 0; i < movable_count; ++i) {
                 const int id = db.movable_ids[i];
                 const Node& node = db.nodes[id];
+                const Real density_lambda = epsilon_stage == 3 ? 0.0 : lambda;
                 const Real preconditioner = std::max<Real>(
-                    1.0, db.node_pin_weight[id] + lambda * node.area());
-                gradient[i] = (wgx[id] + lambda * dgx[id] +
+                    1.0, db.node_pin_weight[id] + density_lambda * node.area());
+                gradient[i] = (wgx[id] + density_lambda * dgx[id] +
                                  obstacle_weight * (stage == 3 ? obstacle_gx[id] : 0.0)) /
                                 preconditioner;
-                gradient[n + i] = (wgy[id] + lambda * dgy[id] +
+                gradient[n + i] = (wgy[id] + density_lambda * dgy[id] +
                                    obstacle_weight * (stage == 3 ? obstacle_gy[id] : 0.0)) /
                                   preconditioner;
             }
@@ -1136,15 +1230,18 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
                 const std::size_t index = db.movable_ids.size() + i;
                 const Real preconditioner = std::max<Real>(
                     1.0, lambda * fillers[i].width * fillers[i].height);
-                gradient[index] = lambda * fgx[i] / preconditioner;
-                gradient[n + index] = lambda * fgy[i] / preconditioner;
+                gradient[index] = epsilon_stage == 3 ? 0.0
+                    : lambda * fgx[i] / preconditioner;
+                gradient[n + index] = epsilon_stage == 3 ? 0.0
+                    : lambda * fgy[i] / preconditioner;
             }
         }
 
         capture_into(db, fillers, previous_positions);
         positions = previous_positions;
-        const int age = refinement_active ? iteration - refinement_start + 1
-                                          : iteration + 1;
+        const int age = epsilon_stage > 1 ? iteration - refinement_start + 1
+            : refinement_active ? iteration - refinement_start + 1
+                                : iteration + 1;
         const Real first_bias_denominator = std::max<Real>(
             1.0e-12, 1.0 - std::pow(config.beta1, age));
         const Real second_bias_denominator = std::max<Real>(
@@ -1158,7 +1255,47 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
                                              second_bias_denominator);
         }
         apply(db, fillers, positions);
-        if (config.progressive_legalization && config.progressive_filter) {
+        if (epsilon_stage == 3) {
+            const std::vector<Real> full_trial = positions;
+            bool accepted = false;
+            Real accepted_fraction = 0.0;
+            for (int backtrack = 0;
+                 backtrack <= config.exact_subgradient_filter_backtracks;
+                 ++backtrack) {
+                const Real trial_fraction = std::ldexp(1.0, -backtrack);
+                std::vector<Real> trial(previous_positions.size());
+                #pragma omp parallel for schedule(static)
+                for (int i = 0; i < static_cast<int>(trial.size()); ++i) {
+                    trial[i] = previous_positions[i] + trial_fraction *
+                        (full_trial[i] - previous_positions[i]);
+                }
+                apply(db, fillers, trial);
+                const Real candidate_hpwl = exact_hpwl(db);
+                ++result.objective_evaluations;
+                const DensityResult candidate_density = density->compute(
+                    db, fillers, nullptr, nullptr, nullptr, nullptr);
+                if (candidate_hpwl <= hpwl + 1.0e-9 &&
+                    candidate_density.overflow <= config.stop_overflow) {
+                    positions = std::move(trial);
+                    accepted = true;
+                    accepted_fraction = trial_fraction;
+                    break;
+                }
+            }
+            if (accepted) {
+                apply(db, fillers, positions);
+                last_exact_filter_fraction = accepted_fraction;
+            } else {
+                positions = previous_positions;
+                apply(db, fillers, positions);
+                std::fill(first.begin(), first.end(), 0.0);
+                std::fill(second.begin(), second.end(), 0.0);
+                std::fill(maximum_second.begin(), maximum_second.end(), 0.0);
+                last_exact_filter_fraction = 0.0;
+            }
+        }
+        if (epsilon_stage != 3 && config.progressive_legalization &&
+            config.progressive_filter) {
             const std::vector<Real> full_trial = positions;
             bool accepted = false;
             Real fraction = 1.0;
@@ -1237,7 +1374,7 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
                 last_filter_fraction = fraction;
             }
         }
-        if (config.tangent_refinement && refinement_active &&
+        if (config.tangent_refinement && refinement_active && epsilon_stage != 3 &&
             !config.progressive_legalization) {
             const std::vector<Real> full_trial = positions;
             bool accepted = false;
@@ -1439,7 +1576,7 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
                           << " trial_scale=" << serious_trial_scale << '\n';
             }
         }
-        if (density_active) {
+        if (density_active && epsilon_stage != 3) {
             ++density_step;
             if (config.progressive_legalization) {
                 if (d.overflow > config.progressive_dual_switch_overflow) {
@@ -1469,7 +1606,8 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
             adaptive_hpwl_history.pop_front();
             adaptive_overflow_history.pop_front();
         }
-        if (config.adaptive_active_set && config.active_set_radius > 0.0 &&
+        if (epsilon_stage == 1 && config.adaptive_active_set &&
+            config.active_set_radius > 0.0 &&
             (!refinement_active || config.adaptive_active_set_refinement) &&
             (iteration + 1) % config.adaptive_active_set_interval == 0) {
             const Real upper = config.stop_overflow + 0.010;
