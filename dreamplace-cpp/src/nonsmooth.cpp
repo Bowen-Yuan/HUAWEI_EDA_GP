@@ -637,6 +637,8 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
     int adaptive_phase = 0;
     std::deque<Real> adaptive_hpwl_history;
     std::deque<Real> adaptive_overflow_history;
+    std::deque<Real> continuation_hpwl_history;
+    std::deque<Real> continuation_overflow_history;
     int last_serious_step = 1;
     Real obstacle_weight_base = 0.0;
     int previous_stage = 0;
@@ -654,17 +656,63 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
     std::vector<Real> best_progressive;
     Metrics best_progressive_metrics;
     Real best_progressive_score = std::numeric_limits<Real>::infinity();
-    const int fixed_epsilon_end = config.epsilon_continuation_start_iteration >= 0
+    const int configured_fixed_epsilon_end =
+        config.epsilon_continuation_start_iteration >= 0
         ? config.epsilon_continuation_start_iteration : config.iterations;
-    const int continuation_end = fixed_epsilon_end +
+    const int continuation_end = configured_fixed_epsilon_end +
         config.epsilon_continuation_iterations;
     const int total_iterations = continuation_end +
         config.exact_subgradient_iterations;
     int previous_epsilon_stage = 1;
+    int actual_fixed_epsilon_end = configured_fixed_epsilon_end;
+    bool state_continuation_started =
+        !config.epsilon_continuation_state_trigger;
 
     for (int iteration = 0; iteration < total_iterations; ++iteration) {
         const auto profile_iteration_start = std::chrono::steady_clock::now();
-        const int epsilon_stage = iteration < fixed_epsilon_end ? 1
+        if (config.epsilon_continuation_state_trigger &&
+            !state_continuation_started) {
+            const bool fallback = iteration >= configured_fixed_epsilon_end;
+            bool stable = refinement_active && refinement_start >= 0 &&
+                iteration - refinement_start >=
+                    config.epsilon_trigger_min_refinement_iterations &&
+                continuation_hpwl_history.size() >=
+                    static_cast<std::size_t>(config.epsilon_trigger_window);
+            Real hpwl_drop = 0.0;
+            Real overflow_min = std::numeric_limits<Real>::infinity();
+            Real overflow_max = -std::numeric_limits<Real>::infinity();
+            if (stable) {
+                const Real hpwl_old = continuation_hpwl_history.front();
+                const Real hpwl_new = continuation_hpwl_history.back();
+                hpwl_drop = (hpwl_old - hpwl_new) /
+                    std::max<Real>(std::abs(hpwl_old), 1.0);
+                for (Real overflow : continuation_overflow_history) {
+                    overflow_min = std::min(overflow_min, overflow);
+                    overflow_max = std::max(overflow_max, overflow);
+                }
+                stable = overflow_max <= config.epsilon_trigger_overflow_upper &&
+                    overflow_max - overflow_min <=
+                        config.epsilon_trigger_overflow_range &&
+                    hpwl_drop >= config.epsilon_trigger_min_hpwl_drop;
+            }
+            if (stable || fallback) {
+                actual_fixed_epsilon_end = iteration;
+                state_continuation_started = true;
+                result.epsilon_continuation_actual_start = iteration;
+                std::cout << "[EpsilonTrigger] iter=" << iteration
+                          << " reason=" << (stable ? "state" : "fallback")
+                          << " refinement_age="
+                          << (refinement_start >= 0
+                                  ? iteration - refinement_start : -1)
+                          << " hpwl_drop=" << hpwl_drop
+                          << " overflow_min=" << overflow_min
+                          << " overflow_max=" << overflow_max << '\n';
+            }
+        }
+        const bool fixed_stage = config.epsilon_continuation_state_trigger
+            ? !state_continuation_started
+            : iteration < configured_fixed_epsilon_end;
+        const int epsilon_stage = fixed_stage ? 1
             : iteration < continuation_end ? 2 : 3;
         if (epsilon_stage != previous_epsilon_stage) {
             // Continue from the reported fixed-stage checkpoint, not from a
@@ -693,12 +741,14 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
             previous_epsilon_stage = epsilon_stage;
         }
         const int continuation_age = epsilon_stage == 2
-            ? iteration - fixed_epsilon_end : 0;
+            ? iteration - actual_fixed_epsilon_end : 0;
+        const int active_continuation_iterations = std::max(
+            1, continuation_end - actual_fixed_epsilon_end);
         const Real continuation_theta = epsilon_stage < 2 ? 0.0
             : epsilon_stage > 2 ? 1.0
-            : config.epsilon_continuation_iterations <= 1 ? 1.0
+            : active_continuation_iterations <= 1 ? 1.0
             : continuation_age / static_cast<Real>(
-                config.epsilon_continuation_iterations - 1);
+                active_continuation_iterations - 1);
         const int obstacle_start = config.hpwl_only_iterations +
             config.progressive_density_iterations;
         const int stage = !config.progressive_legalization
@@ -930,7 +980,7 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
         if (refinement_active) learning_rate *= config.refinement_learning_rate_scale;
         if (epsilon_stage == 2) {
             const Real local_progress = continuation_age / static_cast<Real>(
-                std::max(1, config.epsilon_continuation_iterations));
+                active_continuation_iterations);
             learning_rate *= config.epsilon_continuation_learning_rate_scale /
                 std::sqrt(1.0 + 4.0 * local_progress);
         } else if (epsilon_stage == 3) {
@@ -1611,6 +1661,15 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
                    config.adaptive_active_set_window)) {
             adaptive_hpwl_history.pop_front();
             adaptive_overflow_history.pop_front();
+        }
+        if (config.epsilon_continuation_state_trigger && epsilon_stage == 1) {
+            continuation_hpwl_history.push_back(hpwl);
+            continuation_overflow_history.push_back(d.overflow);
+            while (continuation_hpwl_history.size() >
+                   static_cast<std::size_t>(config.epsilon_trigger_window)) {
+                continuation_hpwl_history.pop_front();
+                continuation_overflow_history.pop_front();
+            }
         }
         if (epsilon_stage == 1 && config.adaptive_active_set &&
             config.active_set_radius > 0.0 &&

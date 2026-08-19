@@ -114,6 +114,12 @@ void usage() {
         << "  --epsilon-continuation-lr-scale X  continuation LR relative to fixed phase\n"
         << "  --epsilon-continuation-optimizer NAME  heavy-ball|adam|amsgrad|adagrad\n"
         << "  --epsilon-continuation-legal-interval N  legal checkpoint interval after stage 1\n"
+        << "  --epsilon-continuation-state-trigger  start stage 2 when refinement is stable\n"
+        << "  --epsilon-trigger-min-refine N  minimum refinement iterations before trigger\n"
+        << "  --epsilon-trigger-window N  trailing stability window\n"
+        << "  --epsilon-trigger-overflow-upper X  maximum overflow in trigger window\n"
+        << "  --epsilon-trigger-overflow-range X  maximum overflow range in trigger window\n"
+        << "  --epsilon-trigger-min-hpwl-drop X  minimum relative HPWL drop in window\n"
         << "  --exact-subgradient-iterations N  appended radius-zero feasible steps\n"
         << "  --exact-subgradient-lr-scale X  radius-zero LR relative to continuation\n"
         << "  --exact-subgradient-optimizer NAME  heavy-ball|adam|amsgrad|adagrad\n"
@@ -298,6 +304,12 @@ Options parse_options(int argc, char** argv) {
             else throw std::runtime_error("unknown epsilon-continuation optimizer: " + value);
         }
         else if (arg == "--epsilon-continuation-legal-interval") options.gp.epsilon_continuation_legal_checkpoint_interval = std::stoi(require_value(i, argc, argv));
+        else if (arg == "--epsilon-continuation-state-trigger") options.gp.epsilon_continuation_state_trigger = true;
+        else if (arg == "--epsilon-trigger-min-refine") options.gp.epsilon_trigger_min_refinement_iterations = std::stoi(require_value(i, argc, argv));
+        else if (arg == "--epsilon-trigger-window") options.gp.epsilon_trigger_window = std::stoi(require_value(i, argc, argv));
+        else if (arg == "--epsilon-trigger-overflow-upper") options.gp.epsilon_trigger_overflow_upper = std::stod(require_value(i, argc, argv));
+        else if (arg == "--epsilon-trigger-overflow-range") options.gp.epsilon_trigger_overflow_range = std::stod(require_value(i, argc, argv));
+        else if (arg == "--epsilon-trigger-min-hpwl-drop") options.gp.epsilon_trigger_min_hpwl_drop = std::stod(require_value(i, argc, argv));
         else if (arg == "--exact-subgradient-iterations") options.gp.exact_subgradient_iterations = std::stoi(require_value(i, argc, argv));
         else if (arg == "--exact-subgradient-lr-scale") options.gp.exact_subgradient_learning_rate_scale = std::stod(require_value(i, argc, argv));
         else if (arg == "--exact-subgradient-optimizer") {
@@ -424,6 +436,13 @@ Options parse_options(int argc, char** argv) {
          options.gp.epsilon_continuation_small_span_threshold < 0.0 ||
          options.gp.epsilon_continuation_learning_rate_scale <= 0.0 ||
          options.gp.epsilon_continuation_legal_checkpoint_interval < 0 ||
+         (options.gp.epsilon_continuation_state_trigger &&
+          options.gp.epsilon_continuation_iterations <= 0) ||
+         options.gp.epsilon_trigger_min_refinement_iterations < 0 ||
+         options.gp.epsilon_trigger_window < 2 ||
+         options.gp.epsilon_trigger_overflow_upper < 0.0 ||
+         options.gp.epsilon_trigger_overflow_range < 0.0 ||
+         options.gp.epsilon_trigger_min_hpwl_drop < 0.0 ||
          options.gp.exact_subgradient_iterations < 0 ||
          options.gp.exact_subgradient_learning_rate_scale <= 0.0 ||
          options.gp.exact_subgradient_filter_backtracks < 0 ||
@@ -555,6 +574,17 @@ void write_summary(const fs::path& path, const Database& db,
         << global_optimizer_name(options.gp.epsilon_continuation_optimizer) << '\n';
     out << "epsilon_continuation_legal_checkpoint_interval="
         << options.gp.epsilon_continuation_legal_checkpoint_interval << '\n';
+    out << "epsilon_continuation_state_trigger="
+        << (options.gp.epsilon_continuation_state_trigger ? "true" : "false") << '\n';
+    out << "epsilon_trigger_min_refinement_iterations="
+        << options.gp.epsilon_trigger_min_refinement_iterations << '\n';
+    out << "epsilon_trigger_window=" << options.gp.epsilon_trigger_window << '\n';
+    out << "epsilon_trigger_overflow_upper="
+        << options.gp.epsilon_trigger_overflow_upper << '\n';
+    out << "epsilon_trigger_overflow_range="
+        << options.gp.epsilon_trigger_overflow_range << '\n';
+    out << "epsilon_trigger_min_hpwl_drop="
+        << options.gp.epsilon_trigger_min_hpwl_drop << '\n';
     out << "exact_subgradient_iterations="
         << options.gp.exact_subgradient_iterations << '\n';
     out << "exact_subgradient_learning_rate_scale="
@@ -608,6 +638,8 @@ void write_summary(const fs::path& path, const Database& db,
     out << "gp_seconds=" << gp.wall_time_seconds << '\n';
     out << "selected_legal_hpwl=" << gp.selected_legal_hpwl << '\n';
     out << "selected_legal_iteration=" << gp.selected_legal_iteration << '\n';
+    out << "epsilon_continuation_actual_start="
+        << gp.epsilon_continuation_actual_start << '\n';
     out << "prelegal_hpwl=" << legal.hpwl_before << '\n';
     out << "greedy_hpwl=" << legal.hpwl_after_greedy << '\n';
     out << "abacus_hpwl=" << legal.hpwl_after_abacus << '\n';

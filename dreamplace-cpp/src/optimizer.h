@@ -108,6 +108,14 @@ struct GlobalPlaceConfig {
     Real epsilon_continuation_learning_rate_scale = 1.0;
     GlobalOptimizer epsilon_continuation_optimizer = GlobalOptimizer::AMSGrad;
     int epsilon_continuation_legal_checkpoint_interval = 0;
+    // Optional state trigger. The configured start remains a fallback
+    // deadline; an early trigger stretches continuation to the same end.
+    bool epsilon_continuation_state_trigger = false;
+    int epsilon_trigger_min_refinement_iterations = 250;
+    int epsilon_trigger_window = 50;
+    Real epsilon_trigger_overflow_upper = 0.085;
+    Real epsilon_trigger_overflow_range = 0.004;
+    Real epsilon_trigger_min_hpwl_drop = 3.0e-4;
     int exact_subgradient_iterations = 0;
     Real exact_subgradient_learning_rate_scale = 0.20;
     GlobalOptimizer exact_subgradient_optimizer = GlobalOptimizer::AdaGrad;
@@ -163,6 +171,7 @@ struct GlobalPlaceResult {
     double wall_time_seconds = 0.0;
     Real selected_legal_hpwl = 0.0;
     int selected_legal_iteration = -1;
+    int epsilon_continuation_actual_start = -1;
 };
 
 GlobalPlaceResult global_place(Database& db, std::vector<Filler>& fillers,
