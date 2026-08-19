@@ -102,6 +102,19 @@ can be enabled with `--adaptive-active-set`; it is disabled by default and is
 documented, together with a1/a2 measurements, in
 `experiments/epsilon-active-optimization-20260813/analysis.md`.
 
+The independent `dreamplace-cpp-relative-epsilon` experiment can constrain
+the trial-direction radius separately for each net and coordinate axis:
+
+```text
+epsilon(e,d) = min(global_radius, span_ratio * span(e,d))
+```
+
+Use `--active-set-span-ratio 0.10` or `0.15` to enable it. A nonzero
+`--active-set-min-radius` is applied only when the directional span is below
+`--active-set-small-span-threshold`; this is the sole case in which epsilon
+may exceed the selected span ratio. All three options default to zero, so
+existing commands retain their original behavior.
+
 The smooth-to-exact continuation study has two additional opt-in components.
 `--bundle-groups N` partitions nets by stable net index and keeps an
 independent short HPWL bundle for each group; nearby exact-subgradient samples
