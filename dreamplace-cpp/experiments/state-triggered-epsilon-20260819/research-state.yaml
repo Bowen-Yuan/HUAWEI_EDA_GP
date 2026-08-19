@@ -1,0 +1,10 @@
+question: "Can a state-triggered per-net epsilon continuation improve final legal HPWL?"
+status: complete
+primary_metric: final_legal_hpwl
+hard_constraints:
+  overflow_target: 0.07
+  internal_legality: true
+  iteration_budget_unchanged: true
+baseline: adaptive_epsilon_20260818_performance
+current_phase: final_analysis
+frozen_variant: state_triggered_span15_no_exact_tail
