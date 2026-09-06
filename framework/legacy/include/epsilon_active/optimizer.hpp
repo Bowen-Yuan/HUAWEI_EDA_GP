@@ -8,7 +8,11 @@
 
 namespace ea {
 
-enum class OptimizerKind { Adam, AMSGrad, AdaGrad, HeavyBall, SGD };
+// Keep all global-view update rules behind this one interface.  The lab
+// runner deliberately does not grow a second optimizer hierarchy.
+enum class OptimizerKind {
+    Adam, AMSGrad, AdaGrad, HeavyBall, SGD, NormalizedSGD, DualAveraging
+};
 
 OptimizerKind parse_optimizer(const std::string& name);
 const char* optimizer_name(OptimizerKind kind) noexcept;
@@ -28,4 +32,3 @@ std::unique_ptr<Optimizer> make_optimizer(OptimizerKind kind, Real beta1,
                                           Real numerical_epsilon);
 
 }  // namespace ea
-

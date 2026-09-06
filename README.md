@@ -9,3 +9,22 @@ Build with `cmake -S . -B build` then `cmake --build build --config Release`. Ru
 `run` defaults to one case. The complete benchmark set only runs through `nsgp batch --all-cases --pipeline ...`. Each module boundary writes a fresh-audited `selected.pl`, CSV summary, and manifest under `framework/results/`.
 
 The project uses a compact static module registry: `layout_init`, `hpwl_adam`, `exact_joint_gp`, `exact_recovery`, `surplus_bisection`, and `equal_shape_swap`. `historical_dct_poisson` remains deliberately disabled and is rejected by `challenge_nonsmooth` pipelines.
+
+## V3 retained global-view experiments
+
+`nsgp lab` is the V3 experiment entry point.  It reads the existing H375
+`adaptec1` 7% checkpoint as a read-only external input, records its SHA-256,
+and keeps layout hand-offs in memory.  A normal run deliberately produces only
+`params.json`, `experiment.md`, and `trajectory.csv` under
+`framework/results/experiments/<run-id>`; overflow in all reports is a
+percentage.  For example:
+
+```powershell
+nsgp lab --case adaptec1 --iterations 50 --optimizer adam --active-ensemble --bundle
+```
+
+Use `--save-stage NAME` only when a placement artifact is explicitly needed.
+The lab supports `adam`, `amsgrad`, `adagrad`, `heavy-ball`, `sgd`,
+`normalized-sgd`, and `dual-averaging`; `--step-policy trust` enables a
+trust-radius cap and exact backtracking.  `--capacity-transport` enables the
+coarse-grid candidate / canonical-grid exact-audit transport stage.

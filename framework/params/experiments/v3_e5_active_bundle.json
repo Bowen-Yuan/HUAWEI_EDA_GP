@@ -1,0 +1,5 @@
+{
+  "description": "V3 E5: active ensemble (0,.25,.5,1 bin) plus four-step temporal min-norm bundle.",
+  "command": "nsgp lab --case adaptec1 --iterations 50 --optimizer adam --active-ensemble --bundle --step-policy control",
+  "expected_artifacts": ["params.json", "experiment.md", "trajectory.csv"]
+}

@@ -38,6 +38,20 @@ public:
             case OptimizerKind::SGD:
                 value = learning_rate * g;
                 break;
+            case OptimizerKind::NormalizedSGD:
+                // Normalization is per coordinate-vector, rather than per
+                // cell, so a huge active-set gradient cannot consume the
+                // entire trust radius in one iteration.
+                value = g;
+                break;
+            case OptimizerKind::DualAveraging:
+                // first_ stores the running dual sum.  This is intentionally
+                // deterministic and uses the same clipping contract as every
+                // other rule.
+                first_[i] += g;
+                value = learning_rate * first_[i] /
+                        std::sqrt(static_cast<Real>(age_));
+                break;
             case OptimizerKind::HeavyBall:
                 first_[i] = momentum_ * first_[i] + (1.0 - momentum_) * g;
                 value = learning_rate * first_[i];
@@ -65,6 +79,14 @@ public:
             }
             delta[i] = std::clamp(value, -maximum_delta, maximum_delta);
         }
+        if (kind_ == OptimizerKind::NormalizedSGD) {
+            Real sum = 0.0;
+            for (const Real g : gradient) sum += g * g;
+            const Real scale = learning_rate / std::max<Real>(1.0e-12, std::sqrt(sum));
+            for (std::size_t i = 0; i < gradient.size(); ++i) {
+                delta[i] = std::clamp(scale * gradient[i], -maximum_delta, maximum_delta);
+            }
+        }
     }
 
 private:
@@ -87,6 +109,8 @@ OptimizerKind parse_optimizer(const std::string& name) {
     if (name == "adagrad") return OptimizerKind::AdaGrad;
     if (name == "heavy-ball") return OptimizerKind::HeavyBall;
     if (name == "sgd") return OptimizerKind::SGD;
+    if (name == "normalized-sgd") return OptimizerKind::NormalizedSGD;
+    if (name == "dual-averaging") return OptimizerKind::DualAveraging;
     throw std::invalid_argument("unknown optimizer: " + name);
 }
 
@@ -97,6 +121,8 @@ const char* optimizer_name(OptimizerKind kind) noexcept {
     case OptimizerKind::AdaGrad: return "adagrad";
     case OptimizerKind::HeavyBall: return "heavy-ball";
     case OptimizerKind::SGD: return "sgd";
+    case OptimizerKind::NormalizedSGD: return "normalized-sgd";
+    case OptimizerKind::DualAveraging: return "dual-averaging";
     }
     return "unknown";
 }
@@ -113,4 +139,3 @@ std::unique_ptr<Optimizer> make_optimizer(OptimizerKind kind, Real beta1,
 }
 
 }  // namespace ea
-

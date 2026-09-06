@@ -21,8 +21,11 @@ if(MSVC)
 else()
   target_compile_options(nsgp_exact_core PRIVATE -Wall -Wextra -Wpedantic -O3)
 endif()
-add_executable(nsgp framework/code/main.cpp)
+add_executable(nsgp framework/code/main.cpp framework/code/experiment_lab.cpp)
 target_link_libraries(nsgp PRIVATE nsgp_exact_core)
+if(WIN32)
+  target_link_libraries(nsgp PRIVATE Advapi32)
+endif()
 
 # Historical replay tooling is intentionally separate from the default
 # challenge executable. It is only used to reproduce H219/H221 in the H375

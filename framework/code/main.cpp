@@ -5,6 +5,7 @@
 #include "epsilon_active/placer.hpp"
 #include "epsilon_active/recovery.hpp"
 #include "epsilon_active/swap_recovery.hpp"
+#include "experiment_lab.hpp"
 #include <json.hpp>
 #include <algorithm>
 #include <chrono>
@@ -53,4 +54,4 @@ void run_case(const Opt& o, const std::string& cas) {
   M final=audit(db,d); write_pl(db,root/"selected.pl"); Json manifest={{"case",cas},{"pipeline",esc(o.pipeline.string())},{"threads",o.threads},{"final_hpwl",final.hpwl},{"final_overflow_percent",final.overflow*100}}; std::ofstream(root/"run_manifest.json")<<manifest.dump(2)<<'\n'; std::cout<<"completed "<<cas<<" -> "<<root<<" HPWL="<<final.hpwl<<" overflow_percent="<<final.overflow*100<<"%"<<'\n';
 }
 }
-int main(int ac,char**av){try{auto o=options(ac,av);if(o.command=="list-modules"){std::cout<<"layout_init\nhpwl_adam\nexact_joint_gp\nexact_recovery\nsurplus_bisection\nequal_shape_swap\nhistorical_dct_poisson (disabled)\n";return 0;}if(o.command=="audit"){if(o.placement.empty())throw std::runtime_error("audit requires --placement");ea::Database db=ea::read_bookshelf(o.dataset/o.cas/o.cas);ea::load_bookshelf_placement(db,o.placement);auto m=audit(db,{});std::cout<<std::setprecision(14)<<"hpwl="<<m.hpwl<<" density_energy="<<m.energy<<" overflow_percent="<<m.overflow*100<<"% max_density="<<m.maxd<<"\n";return 0;}if(o.command=="run"){run_case(o,o.cas);return 0;}if(o.command=="batch"&&o.all){for(auto&s:std::vector<std::string>{"adaptec1","adaptec2","adaptec3","adaptec4","bigblue1","bigblue2","bigblue3","bigblue4"})run_case(o,s);return 0;}usage();throw std::runtime_error("batch requires --all-cases");}catch(const std::exception&e){std::cerr<<"nsgp: "<<e.what()<<"\n";return 1;}}
+int main(int ac,char**av){ if(ac>=2 && std::string(av[1])=="lab") return run_global_view_lab(ac,av); try{auto o=options(ac,av);if(o.command=="list-modules"){std::cout<<"layout_init\nhpwl_adam\nexact_joint_gp\nexact_recovery\nsurplus_bisection\nequal_shape_swap\nhistorical_dct_poisson (disabled)\nglobal_view_gp (lab)\n";return 0;}if(o.command=="audit"){if(o.placement.empty())throw std::runtime_error("audit requires --placement");ea::Database db=ea::read_bookshelf(o.dataset/o.cas/o.cas);ea::load_bookshelf_placement(db,o.placement);auto m=audit(db,{});std::cout<<std::setprecision(14)<<"hpwl="<<m.hpwl<<" density_energy="<<m.energy<<" overflow_percent="<<m.overflow*100<<"% max_density="<<m.maxd<<"\n";return 0;}if(o.command=="run"){run_case(o,o.cas);return 0;}if(o.command=="batch"&&o.all){for(auto&s:std::vector<std::string>{"adaptec1","adaptec2","adaptec3","adaptec4","bigblue1","bigblue2","bigblue3","bigblue4"})run_case(o,s);return 0;}usage();throw std::runtime_error("batch requires --all-cases");}catch(const std::exception&e){std::cerr<<"nsgp: "<<e.what()<<"\n";return 1;}}
