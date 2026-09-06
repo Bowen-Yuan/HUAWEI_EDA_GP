@@ -1,0 +1,8 @@
+/build/
+*.exe
+*.pdb
+framework/results/**
+!framework/results/.gitkeep
+modules/*/results/**
+!modules/*/results/.gitkeep
+*.pl.tmp

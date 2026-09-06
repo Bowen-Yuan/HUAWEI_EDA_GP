@@ -1,0 +1,12 @@
+{
+  "name": "reference_nonsmooth_chain", "compliance_mode": "challenge_nonsmooth",
+  "density": { "bins_x": 64, "bins_y": 64, "target_density": 0.9 },
+  "stages": [
+    { "module": "layout_init", "config": "../../../modules/layout_init/params/center_gaussian_219.json" },
+    { "module": "hpwl_adam", "config": "../../../modules/hpwl_adam/params/seed_h219_like.json" },
+    { "module": "exact_joint_gp", "config": "../../../modules/exact_joint_gp/params/pure_coarse.json" },
+    { "module": "surplus_bisection", "config": "../../../modules/surplus_bisection/params/h372_like.json" },
+    { "module": "exact_recovery", "config": "../../../modules/exact_recovery/params/cap07_full.json" },
+    { "module": "equal_shape_swap", "config": "../../../modules/equal_shape_swap/params/h375_like.json" }
+  ]
+}

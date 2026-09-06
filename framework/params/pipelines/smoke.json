@@ -1,0 +1,10 @@
+{
+  "name": "smoke",
+  "compliance_mode": "challenge_nonsmooth",
+  "density": { "bins_x": 32, "bins_y": 32, "target_density": 0.9 },
+  "stages": [
+    { "module": "layout_init", "config": "../../../modules/layout_init/params/center_gaussian_219.json", "state_policy": "reset" },
+    { "module": "hpwl_adam", "config": "../../../modules/hpwl_adam/params/smoke.json", "state_policy": "reset" },
+    { "module": "exact_joint_gp", "config": "../../../modules/exact_joint_gp/params/smoke.json", "state_policy": "reset" }
+  ]
+}

@@ -1,0 +1,1 @@
+{ "sweeps": 4, "line_search_steps": 4, "step_bins": 8.0, "overflow_cap": 0.15, "net_block": true, "compact_directions": true }

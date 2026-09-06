@@ -1,0 +1,1 @@
+{ "iterations": 40, "lambda": { "strategy": "ratio", "density_weight_scale": 0.5 }, "optimizer": { "name": "adam", "learning_rate": 0.003, "maximum_delta": 4.0 }, "selector": { "mode": "lowest_hpwl_under_overflow_cap", "overflow_cap": 0.15 } }
