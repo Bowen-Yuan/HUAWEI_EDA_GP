@@ -1,1 +1,1 @@
-{ "dataset_root": "D:\\codex_project\\HUAWEI_EDA\\alg-electronic\\ispd2005", "threads": 1, "seed": 219, "density": { "bins_x": 64, "bins_y": 64, "target_density": 0.9 }, "output_root": "framework/results", "artifacts": { "policy": "minimal", "keep_selected_pl": true } }
+{ "dataset_root": "D:\\codex_project\\HUAWEI_EDA\\alg-electronic\\ispd2005", "threads": 1, "seed": 219, "density": { "bins_x": 512, "bins_y": 512, "target_density": 1.0 }, "output_root": "framework/results", "artifacts": { "policy": "minimal", "keep_selected_pl": true } }

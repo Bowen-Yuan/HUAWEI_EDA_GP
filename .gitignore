@@ -3,6 +3,8 @@
 *.pdb
 framework/results/**
 !framework/results/.gitkeep
+framework/experiment_logs/**
+!framework/experiment_logs/.gitkeep
 modules/*/results/**
 !modules/*/results/.gitkeep
 *.pl.tmp

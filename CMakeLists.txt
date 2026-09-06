@@ -23,6 +23,20 @@ else()
 endif()
 add_executable(nsgp framework/code/main.cpp)
 target_link_libraries(nsgp PRIVATE nsgp_exact_core)
+
+# Historical replay tooling is intentionally separate from the default
+# challenge executable. It is only used to reproduce H219/H221 in the H375
+# provenance chain and must be selected explicitly by an experiment script.
+add_executable(nsgp_legacy_stage framework/legacy/src/legacy_stage_main.cpp)
+target_link_libraries(nsgp_legacy_stage PRIVATE nsgp_exact_core)
+add_executable(nsgp_historical_homotopy
+  modules/historical_dct_poisson/code/homotopy_main.cpp
+  modules/historical_dct_poisson/code/electric.cpp
+  modules/historical_dct_poisson/code/bookshelf.cpp
+  modules/historical_dct_poisson/code/spectral.cpp)
+target_include_directories(nsgp_historical_homotopy PRIVATE
+  framework/legacy/include modules/historical_dct_poisson/code)
+target_link_libraries(nsgp_historical_homotopy PRIVATE nsgp_exact_core OpenMP::OpenMP_CXX)
 enable_testing()
 add_executable(nsgp_tests tests/test_legacy_numeric_contracts.cpp)
 target_link_libraries(nsgp_tests PRIVATE nsgp_exact_core)
