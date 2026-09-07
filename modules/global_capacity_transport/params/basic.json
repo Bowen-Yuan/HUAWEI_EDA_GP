@@ -1,0 +1,9 @@
+{
+  "rounds": 1,
+  "max_moves": 10000,
+  "max_source_bins": 64,
+  "candidate_lookahead": 8,
+  "group_size": 1,
+  "destination_mode": "nearest",
+  "global_hpwl_budget": 0.002
+}

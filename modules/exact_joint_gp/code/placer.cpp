@@ -51,7 +51,8 @@ void apply_positions(Database& db, const std::vector<Real>& positions) {
 }
 
 void save_snapshot(const Database& db, const PlaceConfig& config, int iteration) {
-    if (config.snapshot_every <= 0 || iteration % config.snapshot_every != 0) return;
+    if (config.output_dir.empty() || config.snapshot_every <= 0 ||
+        iteration % config.snapshot_every != 0) return;
     std::ostringstream name;
     name << "global_" << std::setw(5) << std::setfill('0') << iteration << ".pl";
     write_bookshelf_placement(db, config.output_dir / "snapshots" / name.str());
@@ -299,8 +300,9 @@ PlaceResult global_place(Database& db, const PlaceConfig& config) {
         throw std::invalid_argument("invalid late-stage switch configuration");
     }
     configure_threads(config.threads);
-    std::filesystem::create_directories(config.output_dir);
-    if (config.snapshot_every > 0) {
+    const bool keep_artifacts = !config.output_dir.empty();
+    if (keep_artifacts) std::filesystem::create_directories(config.output_dir);
+    if (keep_artifacts && config.snapshot_every > 0) {
         std::filesystem::create_directories(config.output_dir / "snapshots");
     }
 
@@ -311,7 +313,7 @@ PlaceResult global_place(Database& db, const PlaceConfig& config) {
         db, config.bins_x, config.bins_y, config.target_density);
     result.bisection = recursive_hypergraph_bisection(
         db, density_oracle, config.bisection);
-    if (config.bisection.enabled) {
+    if (keep_artifacts && config.bisection.enabled) {
         result.objective_evaluations += 4;
         std::ofstream bisection_metrics(config.output_dir / "bisection_metrics.csv");
         if (!bisection_metrics) {
@@ -342,7 +344,7 @@ PlaceResult global_place(Database& db, const PlaceConfig& config) {
     }
     result.coarse_flow = coarse_capacity_flow(
         db, density_oracle, config.coarse_flow);
-    if (config.coarse_flow.enabled && config.coarse_flow.passes > 0) {
+    if (keep_artifacts && config.coarse_flow.enabled && config.coarse_flow.passes > 0) {
         result.objective_evaluations += 4;
         std::ofstream flow_metrics(config.output_dir / "coarse_flow_metrics.csv");
         if (!flow_metrics) {
@@ -383,8 +385,8 @@ PlaceResult global_place(Database& db, const PlaceConfig& config) {
     }
     result.transport = transport_excess_to_capacity(
         db, density_oracle, config.transport);
-    if ((config.transport.rounds > 0 && config.transport.max_moves > 0) ||
-        config.transport.identity_exchange_passes > 0) {
+    if (keep_artifacts && ((config.transport.rounds > 0 && config.transport.max_moves > 0) ||
+        config.transport.identity_exchange_passes > 0)) {
         result.objective_evaluations +=
             4 + 2 * config.transport.identity_exchange_passes;
         std::ofstream transport_metrics(config.output_dir / "transport_metrics.csv");
@@ -444,7 +446,7 @@ PlaceResult global_place(Database& db, const PlaceConfig& config) {
     result.objective_evaluations +=
         result.density_coordinate.sweeps > 0
             ? 2 * result.density_coordinate.sweeps + 2 : 0;
-    if (config.density_coordinate.sweeps > 0) {
+    if (keep_artifacts && config.density_coordinate.sweeps > 0) {
         std::ofstream coordinate_metrics(
             config.output_dir / "density_coordinate_metrics.csv");
         if (!coordinate_metrics) {
@@ -476,7 +478,7 @@ PlaceResult global_place(Database& db, const PlaceConfig& config) {
     result.recovery = recover_hpwl_under_overflow(
         db, density_oracle, config.recovery);
     result.objective_evaluations += result.recovery.objective_evaluations;
-    if (config.recovery.sweeps > 0) {
+    if (keep_artifacts && config.recovery.sweeps > 0) {
         std::ofstream recovery_metrics(config.output_dir / "recovery_metrics.csv");
         if (!recovery_metrics) {
             throw std::runtime_error("cannot create recovery_metrics.csv");
@@ -497,7 +499,7 @@ PlaceResult global_place(Database& db, const PlaceConfig& config) {
     result.compact_recovery = compact_support_contraction(
         db, density_oracle, config.compact_recovery);
     result.objective_evaluations += result.compact_recovery.objective_evaluations;
-    if (config.compact_recovery.sweeps > 0) {
+    if (keep_artifacts && config.compact_recovery.sweeps > 0) {
         std::ofstream compact_metrics(config.output_dir /
                                       "compact_recovery_metrics.csv");
         if (!compact_metrics) {
@@ -522,8 +524,8 @@ PlaceResult global_place(Database& db, const PlaceConfig& config) {
     result.swap_recovery = recover_hpwl_with_equal_shape_swaps(
         db, density_oracle, config.swap_recovery);
     result.objective_evaluations += result.swap_recovery.objective_evaluations;
-    if (config.swap_recovery.sweeps > 0 ||
-        config.swap_recovery.permutation_sweeps > 0) {
+    if (keep_artifacts && (config.swap_recovery.sweeps > 0 ||
+        config.swap_recovery.permutation_sweeps > 0)) {
         std::ofstream swap_metrics(config.output_dir / "swap_recovery_metrics.csv");
         if (!swap_metrics) {
             throw std::runtime_error("cannot create swap_recovery_metrics.csv");
@@ -546,7 +548,7 @@ PlaceResult global_place(Database& db, const PlaceConfig& config) {
     result.post_recovery = recover_hpwl_under_overflow(
         db, density_oracle, config.post_recovery);
     result.objective_evaluations += result.post_recovery.objective_evaluations;
-    if (config.post_recovery.sweeps > 0) {
+    if (keep_artifacts && config.post_recovery.sweeps > 0) {
         std::ofstream post_metrics(config.output_dir / "post_recovery_metrics.csv");
         if (!post_metrics) {
             throw std::runtime_error("cannot create post_recovery_metrics.csv");
@@ -567,7 +569,7 @@ PlaceResult global_place(Database& db, const PlaceConfig& config) {
     result.post_swap_recovery = recover_hpwl_with_equal_shape_swaps(
         db, density_oracle, config.post_swap_recovery);
     result.objective_evaluations += result.post_swap_recovery.objective_evaluations;
-    if (config.post_swap_recovery.sweeps > 0) {
+    if (keep_artifacts && config.post_swap_recovery.sweeps > 0) {
         std::ofstream post_swap_metrics(
             config.output_dir / "post_swap_recovery_metrics.csv");
         if (!post_swap_metrics) {
@@ -590,7 +592,7 @@ PlaceResult global_place(Database& db, const PlaceConfig& config) {
     result.assignment_recovery = recover_hpwl_with_equal_shape_swaps(
         db, density_oracle, config.assignment_recovery);
     result.objective_evaluations += result.assignment_recovery.objective_evaluations;
-    if (config.assignment_recovery.assignment_sweeps > 0) {
+    if (keep_artifacts && config.assignment_recovery.assignment_sweeps > 0) {
         std::ofstream assignment_metrics(
             config.output_dir / "anchor_assignment_metrics.csv");
         if (!assignment_metrics) {
@@ -624,13 +626,16 @@ PlaceResult global_place(Database& db, const PlaceConfig& config) {
     optimizer->reset(2 * db.movable_ids.size());
     AdaptiveEpsilon adaptive(config);
 
-    std::ofstream metrics(config.output_dir / "global_metrics.csv");
-    if (!metrics) throw std::runtime_error("cannot create global_metrics.csv");
-    metrics << "iteration,exact_hpwl,overflow,max_density,density_energy,"
-               "lambda_base,lambda_control,lambda_effective,hpwl_epsilon,"
-               "density_epsilon,epsilon_scale,learning_rate,optimizer,"
-               "batch_accepted,batch_scale,batch_trials,batch_rejected\n";
-    metrics << std::setprecision(12);
+    std::ofstream metrics;
+    if (keep_artifacts) {
+        metrics.open(config.output_dir / "global_metrics.csv");
+        if (!metrics) throw std::runtime_error("cannot create global_metrics.csv");
+        metrics << "iteration,exact_hpwl,overflow,max_density,density_energy,"
+                   "lambda_base,lambda_control,lambda_effective,hpwl_epsilon,"
+                   "density_epsilon,epsilon_scale,learning_rate,optimizer,"
+                   "batch_accepted,batch_scale,batch_trials,batch_rejected\n"
+                << std::setprecision(12);
+    }
 
     const std::size_t n = db.movable_ids.size();
     const Real base_learning_rate = config.step_fraction *
@@ -824,22 +829,24 @@ PlaceResult global_place(Database& db, const PlaceConfig& config) {
                 batch.scale = 1.0;
             }
         }
-        metrics << iteration << ',' << exact_hpwl << ',' << exact_density.overflow << ','
-                << exact_density.max_density << ',' << exact_density.energy << ','
-                << lambda.base() << ',' << lambda.control() << ','
-                << lambda.effective() * lambda_multiplier << ',' << hpwl_epsilon << ','
-                << density_epsilon << ',' << epsilon_scale << ','
-                << learning_rate << ',' << optimizer->name() << ','
-                << (batch.accepted ? 1 : 0) << ',' << batch.scale << ','
-                << batch.trials << ','
-                << ((!batch.accepted && batch.trials > 0) ? 1 : 0) << '\n';
+        if (keep_artifacts) {
+            metrics << iteration << ',' << exact_hpwl << ',' << exact_density.overflow << ','
+                    << exact_density.max_density << ',' << exact_density.energy << ','
+                    << lambda.base() << ',' << lambda.control() << ','
+                    << lambda.effective() * lambda_multiplier << ',' << hpwl_epsilon << ','
+                    << density_epsilon << ',' << epsilon_scale << ','
+                    << learning_rate << ',' << optimizer->name() << ','
+                    << (batch.accepted ? 1 : 0) << ',' << batch.scale << ','
+                    << batch.trials << ','
+                    << ((!batch.accepted && batch.trials > 0) ? 1 : 0) << '\n';
+        }
         adaptive.observe(iteration, exact_hpwl, exact_density.overflow);
     }
 
     // A staged experiment may continue only from a checkpoint produced by
     // this run.  Keep the last trajectory state separate from the feasible
     // selector below, whose purpose is final reporting rather than handoff.
-    write_bookshelf_placement(db, config.output_dir / "last.pl");
+    if (keep_artifacts) write_bookshelf_placement(db, config.output_dir / "last.pl");
 
     if (!best_feasible.empty()) {
         apply_positions(db, best_feasible);

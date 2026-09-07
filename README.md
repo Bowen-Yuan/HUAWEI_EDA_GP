@@ -6,9 +6,9 @@ Default data root: `D:\\codex_project\\HUAWEI_EDA\\alg-electronic\\ispd2005`. Da
 
 Build with `cmake -S . -B build` then `cmake --build build --config Release`. Run the small default-chain check with `build/Release/nsgp.exe run --case adaptec1 --pipeline framework/params/pipelines/smoke.json --threads 8` (or the corresponding single-config executable path). Audit a checkpoint with `nsgp audit --case adaptec1 --placement selected.pl`.
 
-`run` defaults to one case. The complete benchmark set only runs through `nsgp batch --all-cases --pipeline ...`. Each module boundary writes a fresh-audited `selected.pl`, CSV summary, and manifest under `framework/results/`.
+`run` defaults to one case. The complete benchmark set only runs through `nsgp batch --all-cases --pipeline ...`.  The runner is a small registry-driven microkernel: it loads data, invokes stage modules, performs a fresh exact audit at each boundary, and writes only `params.json`, `experiment.md`, and `trajectory.csv`.  Add `--save-stage MODULE` only when an audited placement is explicitly needed.
 
-The project uses a compact static module registry: `layout_init`, `hpwl_adam`, `exact_joint_gp`, `exact_recovery`, `surplus_bisection`, and `equal_shape_swap`. `historical_dct_poisson` remains deliberately disabled and is rejected by `challenge_nonsmooth` pipelines.
+The project uses a compact static module registry.  Each optimization stage owns a `modules/<name>/code/module.cpp` adapter and JSON parameters; shared Bookshelf I/O, exact evaluators, and optimizers live in `framework/kernel`. `historical_dct_poisson` remains deliberately disabled and is rejected by `challenge_nonsmooth` pipelines.
 
 ## V3 retained global-view experiments
 

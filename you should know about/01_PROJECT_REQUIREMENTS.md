@@ -69,13 +69,13 @@ overflow_percent = 100 * overflow_ratio
 
 ## 4. 模块化要求
 
-- 保持 `framework + modules` 的两层概念：framework 提供 I/O、权威 evaluator、runner、通用 optimizer 和实验基础；module 只实现一种算法职责及其参数。
+- 保持 `framework + modules` 的两层微内核结构：framework 只提供 I/O、权威 evaluator、通用 optimizer、模块注册/调用和实验记录；module 实现一个优化阶段及其参数。
 - pipeline 只是模块序列，不是写死的新算法。模块应能删除、重复、重排，并通过显式 layout/checkpoint 交接。
 - 模块之间默认传布局状态，不共享危险的 occupancy cache、optimizer moment 或隐含全局变量。
 - 跨模块 solver state 必须显式声明、版本化并记录 hash；否则在模块边界重置。
 - 新模块优先使用统一的 `Database`、`ExactHpwl`、`ExactOverlapDensity` 和 optimizer API，不得私自重新定义另一套 HPWL/overflow。
 - 不建立大型 plugin system、DI container、artifact manager 或企业级配置框架。注册表、JSON 参数和小型结构即可。
-- 当前 `framework/code/{common,problem,layout,metrics,module_api}.hpp` 是目标架构骨架，尚未完全接入；修改前见架构文档，避免同时维护两套权威状态模型。
+- 当前运行状态统一使用 `ea::Database`，模块协议统一使用 `framework/code/microkernel.hpp`；不要再引入第二套 `Problem/Layout` 状态模型。
 
 ## 5. 数值实验要求
 

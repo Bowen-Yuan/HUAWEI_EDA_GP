@@ -1,6 +1,8 @@
+#include "epsilon_active/bookshelf.hpp"
 #include "epsilon_active/density.hpp"
 #include "epsilon_active/hpwl.hpp"
 #include <cmath>
+#include <filesystem>
 #include <iostream>
 
 int main() {
@@ -16,5 +18,19 @@ int main() {
   auto move=density.evaluate_move(0,5,15); density.commit_move(move); db.nodes[0].x=5; db.nodes[0].y=15;
   auto after=density.evaluate(0,1,nullptr,nullptr);
   if(!std::isfinite(before.energy)||!std::isfinite(after.energy)||!std::isfinite(after.overflow)) return 2;
+  db.node_by_name={{"a",0},{"b",1}};
+  const auto root=std::filesystem::temp_directory_path()/"nsgp_numeric_contracts";
+  std::filesystem::create_directories(root);
+  const auto placement=root/"roundtrip.pl";
+  ea::write_bookshelf_placement(db,placement);
+  ea::Database copy=db; copy.nodes[0].x=0; copy.nodes[0].y=0;
+  ea::load_bookshelf_placement(copy,placement);
+  if(std::abs(copy.nodes[0].x-db.nodes[0].x)>1e-9 ||
+     std::abs(copy.nodes[0].y-db.nodes[0].y)>1e-9) return 3;
+  ea::ExactHpwl copy_hpwl(copy);
+  if(std::abs(copy_hpwl.evaluate(0,1,-1,nullptr,nullptr)-
+              hpwl.evaluate(0,1,-1,nullptr,nullptr))>1e-9) return 4;
+  std::filesystem::remove(placement);
+  std::filesystem::remove(root);
   std::cout<<"numeric contracts passed\n";
 }

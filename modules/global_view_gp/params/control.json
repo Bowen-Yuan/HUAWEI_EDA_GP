@@ -1,0 +1,6 @@
+{
+  "command": "nsgp lab --case adaptec1 --iterations 50 --optimizer adam --step-policy control",
+  "active_ensemble": false,
+  "temporal_bundle": false,
+  "retention": "metrics-only"
+}

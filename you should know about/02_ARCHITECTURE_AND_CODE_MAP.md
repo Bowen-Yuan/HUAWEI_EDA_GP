@@ -1,121 +1,127 @@
-# 02 — 顶层架构与代码地图
+# 02 — 微内核架构与代码地图
 
-## 1. 当前真实构建图
+## 1. 真实构建与调用图
 
 ```text
-Bookshelf dataset / external .pl
-              │
-              ▼
-framework/legacy/src/bookshelf.cpp
-              │  ea::Database（当前运行时权威数据结构）
-              ├──────── ExactHpwl
-              ├──────── ExactOverlapDensity
-              └──────── placement/search modules
-                              │
-        ┌─────────────────────┴──────────────────────┐
-        ▼                                            ▼
-framework/code/main.cpp                  framework/code/experiment_lab.cpp
-run / batch / audit                      lab：V3 metrics-only 实验
-        │                                            │
-旧式 stage .pl + manifest                params.json + experiment.md + trajectory.csv
+Bookshelf / external checkpoint
+                │
+                ▼
+framework/kernel
+I/O + ea::Database + exact HPWL/density + optimizer
+                │
+                ▼
+framework/code/microkernel
+registry + stage context + fresh audit + three-file experiment log
+                │
+       pipeline module sequence
+                │
+      ┌─────────┼────────────────────────────┐
+      ▼         ▼                            ▼
+modules/layout_init   modules/exact_joint_gp   modules/.../module.cpp
+      │         │                            │
+      └─────────┴──── in-memory Database ────┘
+                │
+                ▼
+params.json + experiment.md + trajectory.csv
 ```
 
-`CMakeLists.txt` 将 `framework/legacy/src` 中 14 个源文件编译为 `nsgp_exact_core`，再链接给各个可执行文件。因此，当前权威算法实现位于 `framework/legacy`；目录名虽叫 legacy，但它不是可忽略的废弃代码。
+顶层没有算法 `if/else` 链。`main.cpp` 只解析命令和 pipeline，通过 `ModuleRegistry` 按名字调用阶段。新增普通优化阶段时，主要改动应局限于：
 
-## 2. 顶层目录
+```text
+modules/<new_stage>/code/module.cpp
+modules/<new_stage>/params/*.json
+CMakeLists.txt                 # 加入一个 source
+microkernel.cpp               # 注册一行
+```
 
-| 目录/文件 | 内容与职责 | 是否进入正常构建 |
+如果新阶段需要新的共享 exact 原语，才修改 `framework/kernel`。
+
+## 2. framework 的最小职责
+
+### `framework/kernel`
+
+共享数值内核，不包含固定优化流程：
+
+- `include/epsilon_active/*.hpp`：`ea::Database`、exact evaluator 和算法接口。
+- `src/bookshelf.cpp`：Bookshelf I/O 和坐标转换。
+- `src/hpwl.cpp`：exact weighted pin-offset HPWL 与 active direction。
+- `src/density.cpp`：exact rectangle/bin occupancy、overflow、energy 和 incremental audit。
+- `src/optimizer.cpp`：统一 optimizer 实现。
+
+### `framework/code/microkernel.hpp/.cpp`
+
+微内核只提供：
+
+- `DensityConfig`、`ExactMetrics`、`StageContext`、`StageStats`；
+- `ModuleRegistry`；
+- `exact_audit`、movable clamp、OpenMP thread 设置；
+- checkpoint SHA-256；
+- `ExperimentLog` 三文件记录器；
+- 默认模块的最小注册表。
+
+### `framework/code/main.cpp`
+
+- 命令：`run`、`batch`、`audit`、`list-modules`、`lab`。
+- 读取 JSON pipeline 和每阶段 JSON 参数。
+- 构造完整 module chain provenance。
+- 在每个阶段前后 fresh exact audit。
+- 默认只产生 `params.json`、`experiment.md`、`trajectory.csv`。
+- 只有 `--save-stage MODULE` 才写 `saved/MODULE.pl`。
+
+`global_view_gp` 的单阶段 lab CLI 位于它自己的模块目录，不再放在 framework。
+
+## 3. 模块目录是策略权威实现
+
+| 模块 | 权威实现/适配器 | 作用 |
 |---|---|---|
-| `CMakeLists.txt` | C++17、OpenMP、四个 target、Windows Advapi32 SHA-256 依赖 | 是，权威构建描述 |
-| `AGENTS.md` | 强制后续模型先读并同步维护本交接目录 | 否 |
-| `README.md` | 简短使用说明 | 否 |
-| `framework/code` | CLI、V3 lab、未来轻量模块 API 骨架 | `main.cpp`、`experiment_lab.cpp` 进入 `nsgp` |
-| `framework/legacy/include/epsilon_active` | 当前 `ea` API、配置和结果结构 | 是 |
-| `framework/legacy/src` | 当前 exact evaluator、I/O、optimizer 和算法实现 | 是，组成 `nsgp_exact_core` |
-| `framework/params` | 默认 case、默认 evaluator、pipeline 与 V3 实验示例配置 | 运行时/说明 |
-| `framework/results` | 普通运行和 V3 实验结果；默认被 Git 忽略 | 否 |
-| `framework/experiment_logs` | 历史 H375 完整复现日志；默认被 Git 忽略 | 否 |
-| `modules` | 面向研究者的模块目录、参数和部分源码镜像 | 参数被 pipeline 使用；大多数 code 镜像不由 CMake 单独编译 |
-| `plan` | V2 项目设计和 V3 retention/global-view 方案 | 否；目标文档，不等于现状 |
-| `scripts` | 历史 H375 调用链复现脚本 | 显式运行才使用 |
-| `tests` | exact 数值契约测试和 retention PowerShell 测试 | 部分由 CTest 使用 |
-| `third_party/json.hpp` | vendored nlohmann JSON 单头文件 | 是 |
-| `bin`、`build` | 本机构建产物 | 不提交 |
-| `you should know about` | 本交接知识库 | 必须随架构同步提交 |
+| `layout_init` | `code/module.cpp` | raw 或中心高斯初始化 |
+| `hpwl_adam` | `code/module.cpp` | 配置共享 exact HPWL/optimizer，执行 HPWL-only seed |
+| `exact_joint_gp` | `placer.cpp`、`lambda_controller.cpp`、`batch_acceptance.cpp`、`module.cpp` | exact joint GP 阶段 |
+| `exact_recovery` | `recovery.cpp`、`compact_recovery.cpp`、`module.cpp` | cap 内 recovery |
+| `surplus_bisection` | `bisection.cpp`、`module.cpp` | surplus-only 容量二分 |
+| `equal_shape_swap` | `swap_recovery.cpp`、`module.cpp` | equal-shape / net-aware swap |
+| `global_capacity_transport` | `coarse_flow.cpp`、`transport.cpp`、`module.cpp` | coarse 候选与 exact-audited transport |
+| `density_coordinate` | `density_coordinate.cpp`、`module.cpp` | exact density coordinate search |
+| `global_view_gp` | `global_view_lab.cpp/.hpp` | active ensemble、bundle、backtracking/trust 单阶段实验 |
+| `historical_exact_replay` | `legacy_stage_main.cpp` | 历史 exact CLI 兼容入口 |
+| `historical_dct_poisson` | 独立 Bookshelf/electric/spectral/homotopy 代码 | 只做历史 smooth 复现 |
 
-## 3. `framework/code`
+旧的 `framework/legacy` 权威目录已移除。原来与 module 逐字节相同的七份策略副本已删除；原 `hpwl_adam` 下未参与构建的 HPWL/optimizer 镜像也已删除。Git 历史仍可恢复，但不要重新引入源码镜像。
 
-### `main.cpp`
+## 4. CMake target
 
-当前紧凑 CLI 和旧 pipeline runner：
+- `nsgp_numeric_kernel`：四个 framework 数值原语 + 各模块算法源；名称表示共享链接单元，不表示固定算法流程。
+- `nsgp`：微内核 CLI、模块适配器和 global-view lab。
+- `nsgp_tests`：exact 数值和 placement round-trip 契约。
+- `nsgp_legacy_stage`：历史 exact 兼容目标，源码在 module 目录。
+- `nsgp_historical_homotopy`：历史 DCT/Poisson 目标。
 
-- 命令：`run`、`batch`、`audit`、`list-modules`；遇到 `lab` 时转发给 `run_global_view_lab`。
-- JSON pipeline 的模块名静态分派到 `layout_init`、`hpwl_adam`、`exact_joint_gp`、`exact_recovery`、`surplus_bisection`、`equal_shape_swap`。
-- `challenge_nonsmooth` 会拒绝 `historical_dct_poisson`。
-- 每个模块前后 fresh audit。
-- 旧 `run` 当前仍在 `framework/results` 写 stage `selected.pl`、`stage_manifest.json`、`case_summary.csv` 和最终 `.pl`；不要误认为全项目都已 metrics-only。
-- `hpwl_adam`/`exact_joint_gp` 通过 `ea::global_place` 执行，并使用 `_scratch` 输出目录，仍有旧式写盘副作用。
+CMake 配置时将 Git branch/commit 编译进 `nsgp` 的实验元数据；dirty 状态当前记录为 `not_checked`。
 
-### `experiment_lab.cpp/.hpp`
+## 5. 配置与结果
 
-V3 研究入口，直接复用 `ea` exact core：
+- `framework/params/defaults.json`：默认数据目录、seed、thread、canonical evaluator。
+- `framework/params/cases.json`：默认 case 和八 case 清单。
+- `framework/params/pipelines/*.json`：模块顺序；不是硬编码算法。
+- `modules/<stage>/params/*.json`：阶段参数和实验示例。
+- `framework/results/experiments/<run_id>`：统一实验目录，默认被 Git 忽略。
+- `framework/experiment_logs`：历史重产物复现日志，不作为新实验模板。
 
-- 默认从外部 H375 7% `adaptec1` checkpoint 读取布局并用 Windows CryptoAPI 计算 SHA-256。
-- 实现 active ensemble、minimum-norm simplex 聚合、4 步 temporal bundle、exact backtracking、trust radius 和轻量 capacity transport。
-- 同一进程内传递布局，`ExperimentWorkspace` 位于系统临时目录并在析构时清理。
-- 正常实验只输出三个 metrics 文件；仅显式 `--save-stage NAME` 时写 `saved/NAME.pl`。
-- 当前限制见 `05_CURRENT_STATE.md`：元数据尚未覆盖 V3 方案所有字段，threads 未实际设置 OpenMP，SHA-256 路径是 Windows-only。
+## 6. 状态与依赖方向
 
-### 架构骨架头文件
+```text
+framework/kernel  ← modules  ← microkernel runner
+```
 
-- `common.hpp`：`Real`、`NodeId`、`Rect`。
-- `problem.hpp`：不可变问题描述 `Problem`、`NodeInfo`。
-- `layout.hpp`：坐标、orientation 和 revision。
-- `metrics.hpp`：轻量 `Metrics`。
-- `module_api.hpp`：`RunContext`、`StateArtifact`、`ModuleStats`、`ModuleResult`。
+- 模块之间通过同一个内存 `ea::Database` 顺序交接。
+- 每个阶段自行构造短生命周期 evaluator/optimizer；不跨阶段偷偷共享 cache/moment。
+- framework 不 include 某个具体策略实现。
+- module 可以调用 kernel API；普通 module 不应依赖另一个 module 的私有实现。
+- `exact_joint_gp` 链接其他低层算法函数是历史组合能力；新 pipeline 应优先把它们作为独立 stage 显式调用。
 
-这些结构目前不是 `ea::Database` 主运行路径的权威实现。若继续完成 V2 解耦，应逐步接线并一次只保留一个权威 evaluator；不要简单复制 `ea` 状态形成长期双轨。
+## 7. 数据和坐标
 
-## 4. `framework/legacy/include/epsilon_active`
-
-| 文件 | 核心接口 |
-|---|---|
-| `types.hpp` | `Node`、`Pin`、`Net`、`Row`、`Database`、`DensityMetrics`、`IterationMetrics` |
-| `bookshelf.hpp` | 读取 benchmark、加载/写出 `.pl`、中心高斯初始化 |
-| `hpwl.hpp` | `ExactHpwl::evaluate` |
-| `density.hpp` | `ExactOverlapDensity`，full evaluate、price direction、node/group incremental move audit |
-| `optimizer.hpp` | Adam、AMSGrad、AdaGrad、HeavyBall、SGD、NormalizedSGD、DualAveraging |
-| `lambda_controller.hpp` | Dreamplace、Trajectory、Ratio 三种 lambda policy |
-| `placer.hpp` | `PlaceConfig`、`PlaceResult`、`global_place` |
-| `batch_acceptance.hpp` | exact batch proposal acceptance/backtracking |
-| `recovery.hpp` | overflow cap 下的 exact HPWL recovery |
-| `compact_recovery.hpp` | support contraction |
-| `density_coordinate.hpp` | exact overlap coordinate descent |
-| `bisection.hpp` | 递归超图/容量二分 |
-| `coarse_flow.hpp` | 粗粒度容量流 |
-| `transport.hpp` | excess-to-capacity transport、auction/Hilbert/identity exchange |
-| `swap_recovery.hpp` | equal-shape、net-aware、assignment/permutation recovery |
-
-对应实现全部在 `framework/legacy/src`。`legacy_stage_main.cpp` 不进入 core library，而是单独构建成历史复现 CLI。
-
-## 5. 配置层
-
-- `framework/params/defaults.json`：默认数据目录、seed 219、1 thread、canonical 512×512、target density 1.0。注意旧 pipeline 文件可自行覆盖为 32/64 和 0.9。
-- `framework/params/cases.json`：默认 `adaptec1` 与八 case 清单。
-- `framework/params/pipelines/smoke.json`：32×32、三阶段快速 smoke。
-- `framework/params/pipelines/reference_nonsmooth_chain.json`：64×64 的模块组合示例，不是最终算法或 canonical 实验配置。
-- `framework/params/experiments/*.json`：V3 E0/E5 命令说明，目前不是被 `lab` 自动读取的完整配置文件。
-- `modules/*/params/*.json`：各模块参数；pipeline 的相对路径从 pipeline 文件父目录解析。
-
-## 6. 源码镜像风险
-
-`modules/*/code` 多数文件与 `framework/legacy/src` 是相同副本，但 CMake 当前编译后者。盘点时以下镜像相同：HPWL、placer、lambda controller、batch acceptance、recovery、compact recovery、bisection、swap recovery。
-
-`modules/hpwl_adam/code/optimizer.cpp` 已经与权威 `framework/legacy/src/optimizer.cpp` 不同：后者包含 V3 新增的 NormalizedSGD 和 DualAveraging。修改算法时应先改权威实现；若模块镜像仍被保留，应同步或明确删除镜像，不能让两者无说明漂移。
-
-## 7. 数据与坐标边界
-
-- Bookshelf benchmark base 传入形式是 `<dataset>/<case>/<case>`，由 `.aux` 继续解析 `.nodes/.nets/.pl/.scl/.wts`。
-- 数据不能提交进本仓库。
-- 移动单元必须 clamp 到 region，固定单元不得被移动。
-- `.pl` round trip 必须保持中心/左下角转换和 fixed/terminal 标志。
+- benchmark base：`<dataset>/<case>/<case>`。
+- 内存 `Node.x/y` 为中心，`.pl` 为左下角。
+- fixed node 不移动；physical fixed macro 占容量；`terminal_NI` 不占容量。
+- 数据集和外部 checkpoint 不进入 Git。

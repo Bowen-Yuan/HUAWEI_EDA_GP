@@ -1,0 +1,8 @@
+{
+  "command": "nsgp lab --case adaptec1 --iterations 50 --optimizer adam --active-ensemble --bundle --step-policy trust",
+  "active_ensemble": true,
+  "epsilon_bin_scales": [0.0, 0.25, 0.5, 1.0],
+  "temporal_bundle": true,
+  "bundle_size": 4,
+  "retention": "metrics-only"
+}

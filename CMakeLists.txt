@@ -5,42 +5,74 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 find_package(OpenMP REQUIRED)
 
-set(LEGACY_SOURCES
-  framework/legacy/src/batch_acceptance.cpp framework/legacy/src/bisection.cpp
-  framework/legacy/src/bookshelf.cpp framework/legacy/src/compact_recovery.cpp
-  framework/legacy/src/coarse_flow.cpp framework/legacy/src/density_coordinate.cpp
-  framework/legacy/src/density.cpp framework/legacy/src/hpwl.cpp
-  framework/legacy/src/lambda_controller.cpp framework/legacy/src/optimizer.cpp
-  framework/legacy/src/placer.cpp framework/legacy/src/recovery.cpp
-  framework/legacy/src/swap_recovery.cpp framework/legacy/src/transport.cpp)
-add_library(nsgp_exact_core ${LEGACY_SOURCES})
-target_include_directories(nsgp_exact_core PUBLIC framework/legacy/include framework/code third_party)
-target_link_libraries(nsgp_exact_core PUBLIC OpenMP::OpenMP_CXX)
+set(NUMERIC_KERNEL_SOURCES
+  framework/kernel/src/bookshelf.cpp
+  framework/kernel/src/density.cpp
+  framework/kernel/src/hpwl.cpp
+  framework/kernel/src/optimizer.cpp)
+set(MODULE_ALGORITHM_SOURCES
+  modules/exact_joint_gp/code/batch_acceptance.cpp
+  modules/exact_joint_gp/code/lambda_controller.cpp
+  modules/exact_joint_gp/code/placer.cpp
+  modules/exact_recovery/code/compact_recovery.cpp
+  modules/exact_recovery/code/recovery.cpp
+  modules/surplus_bisection/code/bisection.cpp
+  modules/equal_shape_swap/code/swap_recovery.cpp
+  modules/global_capacity_transport/code/coarse_flow.cpp
+  modules/global_capacity_transport/code/transport.cpp
+  modules/density_coordinate/code/density_coordinate.cpp)
+add_library(nsgp_numeric_kernel ${NUMERIC_KERNEL_SOURCES} ${MODULE_ALGORITHM_SOURCES})
+target_include_directories(nsgp_numeric_kernel PUBLIC framework/kernel/include framework/code third_party)
+target_link_libraries(nsgp_numeric_kernel PUBLIC OpenMP::OpenMP_CXX)
 if(MSVC)
-  target_compile_options(nsgp_exact_core PRIVATE /W4 /O2)
+  target_compile_options(nsgp_numeric_kernel PRIVATE /W4 /O2)
 else()
-  target_compile_options(nsgp_exact_core PRIVATE -Wall -Wextra -Wpedantic -O3)
+  target_compile_options(nsgp_numeric_kernel PRIVATE -Wall -Wextra -Wpedantic -O3)
 endif()
-add_executable(nsgp framework/code/main.cpp framework/code/experiment_lab.cpp)
-target_link_libraries(nsgp PRIVATE nsgp_exact_core)
+add_executable(nsgp
+  framework/code/main.cpp
+  framework/code/microkernel.cpp
+  modules/global_view_gp/code/global_view_lab.cpp
+  modules/layout_init/code/module.cpp
+  modules/hpwl_adam/code/module.cpp
+  modules/exact_joint_gp/code/module.cpp
+  modules/exact_recovery/code/module.cpp
+  modules/surplus_bisection/code/module.cpp
+  modules/equal_shape_swap/code/module.cpp)
+target_sources(nsgp PRIVATE
+  modules/global_capacity_transport/code/module.cpp
+  modules/density_coordinate/code/module.cpp)
+target_include_directories(nsgp PRIVATE modules/global_view_gp/code)
+target_link_libraries(nsgp PRIVATE nsgp_numeric_kernel)
 if(WIN32)
   target_link_libraries(nsgp PRIVATE Advapi32)
 endif()
+execute_process(COMMAND git rev-parse --short HEAD
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  OUTPUT_VARIABLE NSGP_GIT_COMMIT OUTPUT_STRIP_TRAILING_WHITESPACE
+  ERROR_QUIET)
+execute_process(COMMAND git branch --show-current
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  OUTPUT_VARIABLE NSGP_GIT_BRANCH OUTPUT_STRIP_TRAILING_WHITESPACE
+  ERROR_QUIET)
+target_compile_definitions(nsgp PRIVATE
+  NSGP_GIT_COMMIT="${NSGP_GIT_COMMIT}"
+  NSGP_GIT_BRANCH="${NSGP_GIT_BRANCH}")
 
 # Historical replay tooling is intentionally separate from the default
 # challenge executable. It is only used to reproduce H219/H221 in the H375
 # provenance chain and must be selected explicitly by an experiment script.
-add_executable(nsgp_legacy_stage framework/legacy/src/legacy_stage_main.cpp)
-target_link_libraries(nsgp_legacy_stage PRIVATE nsgp_exact_core)
+add_executable(nsgp_legacy_stage modules/historical_exact_replay/code/legacy_stage_main.cpp)
+target_link_libraries(nsgp_legacy_stage PRIVATE nsgp_numeric_kernel)
 add_executable(nsgp_historical_homotopy
   modules/historical_dct_poisson/code/homotopy_main.cpp
   modules/historical_dct_poisson/code/electric.cpp
   modules/historical_dct_poisson/code/bookshelf.cpp
   modules/historical_dct_poisson/code/spectral.cpp)
 target_include_directories(nsgp_historical_homotopy PRIVATE
-  framework/legacy/include modules/historical_dct_poisson/code)
-target_link_libraries(nsgp_historical_homotopy PRIVATE nsgp_exact_core OpenMP::OpenMP_CXX)
+  framework/kernel/include modules/historical_dct_poisson/code)
+target_link_libraries(nsgp_historical_homotopy PRIVATE nsgp_numeric_kernel OpenMP::OpenMP_CXX)
 enable_testing()
-add_executable(nsgp_tests tests/test_legacy_numeric_contracts.cpp)
-target_link_libraries(nsgp_tests PRIVATE nsgp_exact_core)
+add_executable(nsgp_tests tests/test_numeric_contracts.cpp)
+target_link_libraries(nsgp_tests PRIVATE nsgp_numeric_kernel)
 add_test(NAME nsgp_numeric_contracts COMMAND nsgp_tests)

@@ -1,81 +1,71 @@
 # 07 — 文件级索引
 
-本索引覆盖受管项目文件的职责，不列出 `bin/build` 二进制、被忽略的普通实验内容以及 vendored `json.hpp` 的内部实现细节。
-
 ## 根目录
 
-- `.gitignore`：忽略 build、exe、framework/module results、experiment logs 和临时 `.pl`。
-- `AGENTS.md`：让支持仓库级指令的 AI 自动获知交接文档和同步更新义务。
-- `CMakeLists.txt`：唯一权威构建清单。
-- `README.md`：面向使用者的简要说明。
-- `third_party/json.hpp`：nlohmann JSON 单头依赖；除非升级依赖，不要手工修改。
+- `.gitignore`：忽略 build、exe、常规 results/logs 和临时 `.pl`。
+- `AGENTS.md`：强制 AI 阅读并同步交接知识库。
+- `CMakeLists.txt`：权威构建与源码所有权清单。
+- `README.md`：简明构建、CLI 和微内核说明。
+- `third_party/json.hpp`：vendored nlohmann JSON；不要手改内部实现。
 
 ## `framework/code`
 
-- `main.cpp`：主 CLI、JSON pipeline runner、module 静态分派、旧式结果 writer、audit。
-- `experiment_lab.cpp`：V3 metrics-only 实验、SHA-256、active/bundle、backtracking/trust、capacity transport。
-- `experiment_lab.hpp`：`run_global_view_lab` 声明。
-- `common.hpp`：未来 `nsgp` 数据层的基本类型。
-- `problem.hpp`：未来只读问题结构。
-- `layout.hpp`：未来独立布局和 revision。
-- `metrics.hpp`：未来统一指标结构。
-- `module_api.hpp`：未来模块上下文、状态产物和返回值协议。
+- `main.cpp`：极薄 CLI/pipeline orchestration；不实现具体优化算法。
+- `microkernel.hpp`：阶段上下文、统计、registry、audit、experiment log API。
+- `microkernel.cpp`：上述最小机制的实现与默认模块注册。
 
-## `framework/legacy/src`（当前权威 core）
+原来未接线的 `common/problem/layout/metrics/module_api` 骨架已删除，避免第二套运行状态。
 
-- `bookshelf.cpp`：Bookshelf 文件读取、placement 读写、中心初始化。
-- `hpwl.cpp`：exact weighted pin-offset HPWL 和 epsilon-active direction。
-- `density.cpp`：exact rectangle/bin occupancy、energy/overflow、direction、node/group move delta。
-- `optimizer.cpp`：统一 stateful optimizer 实现和字符串解析。
-- `lambda_controller.cpp`：density multiplier 初始化与更新策略。
-- `batch_acceptance.cpp`：批量候选的 exact backtracking/接受。
-- `placer.cpp`：旧 `global_place` 主循环、direction 组合、可选后处理、snapshot 和结果写盘。
-- `recovery.cpp`：overflow cap 下 node/net-block exact recovery。
-- `compact_recovery.cpp`：compact support contraction。
-- `density_coordinate.cpp`：基于 exact overlap 的坐标下降。
-- `bisection.cpp`：容量约束递归二分和 leaf assignment。
-- `coarse_flow.cpp`：coarse capacity flow 候选生成与接受。
-- `transport.cpp`：容量搬运、atomic/group/auction/Hilbert/identity 策略。
-- `swap_recovery.cpp`：equal-shape、net-aware、assignment/permutation swap。
-- `legacy_stage_main.cpp`：历史参数面完整的独立 CLI；不进入 core library。
+## `framework/kernel`
 
-## `framework/legacy/include/epsilon_active`
+- `include/epsilon_active/types.hpp`：唯一运行时 `ea::Database` 和基础指标。
+- `include/epsilon_active/*.hpp`：exact evaluator、optimizer 与各模块算法接口。
+- `src/bookshelf.cpp`：Bookshelf I/O。
+- `src/hpwl.cpp`：exact HPWL 与 active direction。
+- `src/density.cpp`：exact density/overflow、node/group incremental audit。
+- `src/optimizer.cpp`：Adam、AMSGrad、AdaGrad、HeavyBall、SGD、NormalizedSGD、DualAveraging。
 
-每个 `.hpp` 与同名 `.cpp` 对应；`types.hpp` 提供当前权威 `ea::Database` 和指标结构，`placer.hpp` 汇总组合 GP 的所有子模块配置。修改配置字段时必须同步 parser、默认值、记录器和测试。
-
-## `framework/params`
-
-- `defaults.json`：数据目录、thread、seed、canonical 512×512/1.0 和旧 artifacts 默认。
-- `cases.json`：default case 和八 case 清单。
-- `pipelines/smoke.json`：32×32 三阶段 smoke。
-- `pipelines/reference_nonsmooth_chain.json`：64×64 六模块参考组合。
-- `experiments/v3_e0_adam_control.json`：V3 E0 命令说明。
-- `experiments/v3_e5_active_bundle.json`：V3 E5 命令说明。
+`framework/legacy` 已移除，不再是构建权威。
 
 ## `modules`
 
-每个模块都有 `params/`；`results/.gitkeep` 只保留空目录。`code/` 当前是研究可读镜像，不是独立 CMake library：
+每个普通 stage 以 `code/module.cpp` 连接微内核，以 `params/*.json` 表达实验变量：
 
-- `layout_init`：只有 raw/center Gaussian 参数，无独立 code 文件。
-- `hpwl_adam`：`hpwl.cpp`、`optimizer.cpp` 镜像；后者当前落后于 core。
-- `exact_joint_gp`：`placer.cpp`、`lambda_controller.cpp`、`batch_acceptance.cpp` 镜像及四组参数。
-- `exact_recovery`：`recovery.cpp`、`compact_recovery.cpp` 镜像及 7%/15% 参数。
-- `surplus_bisection`：`bisection.cpp` 镜像和 H372-like 参数。
-- `equal_shape_swap`：`swap_recovery.cpp` 镜像和 H375-like 参数。
-- `historical_dct_poisson`：独立的 `types.h`、Bookshelf reader、FFT/DCT spectral 实现、electric density 和 homotopy CLI；只用于历史复现。
+- `layout_init`：初始化适配器和 raw/center-Gaussian 参数。
+- `hpwl_adam`：HPWL-only stage 适配器；HPWL/optimizer 直接复用 kernel，没有源码镜像。
+- `exact_joint_gp`：权威 placer、lambda、batch acceptance、stage adapter 和参数。
+- `exact_recovery`：权威 recovery、compact recovery、stage adapter 和 cap 参数。
+- `surplus_bisection`：权威 bisection、stage adapter 和 H372-like 参数。
+- `equal_shape_swap`：权威 swap recovery、stage adapter 和 H375-like 参数。
+- `global_capacity_transport`：权威 coarse flow、transport、stage adapter 和基础参数。
+- `density_coordinate`：权威 coordinate search、stage adapter 和基础参数。
+- `global_view_gp`：`global_view_lab.cpp/.hpp`、control/active-bundle 参数；目前为专用 lab stage。
+- `historical_exact_replay`：历史 exact CLI 源，保留 target 名 `nsgp_legacy_stage` 以兼容脚本。
+- `historical_dct_poisson`：独立 Bookshelf/electric/spectral/homotopy 历史 smooth 模块。
+
+各 `results/.gitkeep` 只保留空目录，不在模块目录堆积普通实验产物。
+
+## `framework/params`
+
+- `defaults.json`：数据目录、threads、seed、canonical 512×512/1.0。
+- `cases.json`：默认与完整 case 清单。
+- `pipelines/smoke.json`：32×32 三阶段结构 smoke。
+- `pipelines/reference_nonsmooth_chain.json`：64×64 六模块组合示例。
+
+V3 global-view 示例参数已经归入 `modules/global_view_gp/params`，不再在 framework 复制一份。
 
 ## `scripts`
 
-- `run_h375_replay.ps1`：按 H219 → H221 → H252–H257 → H372 → H375 顺序调用两个历史 executable；每阶段写 invocation、stdout/stderr 和 placements。它是重产物历史复现脚本，不是新实验模板。
+- `run_h375_replay.ps1`：历史 H219→H375 重产物复现脚本；不作为新实验模板。
 
 ## `tests`
 
-- `test_legacy_numeric_contracts.cpp`：2-node toy DB，验证 weighted pin-offset HPWL 数值以及 density move 前后有限性。覆盖面较小。
-- `test_v3_retention_contract.ps1`：验证指定 experiment 根目录只有三个 metrics 文件并存在 overflow percentage 列。
+- `test_numeric_contracts.cpp`：exact HPWL/density 小例及 placement round trip。
+- `test_v3_retention_contract.ps1`：三文件、百分比字段、显式 save、外部 hash、workspace cleanup 检查。
 
 ## `plan`
 
-- `NEW_PROJECT_IMPLEMENTATION_PLAN_V2.md`：完整 V2 目标设计，涵盖数学契约、模块 API、pipeline、结果协议、测试矩阵和迁移顺序。
-- `NONSMOOTH_GP_RETENTION_GLOBAL_OPTIMIZER_PLAN_V3.md`：V3 metrics-only、global view、optimizer/step、capacity transport 和实验矩阵方案。
+- `NEW_PROJECT_IMPLEMENTATION_PLAN_V2.md`：项目数学契约、模块化目标和迁移设计。
+- `NONSMOOTH_GP_RETENTION_GLOBAL_OPTIMIZER_PLAN_V3.md`：metrics-only、global-view、optimizer/step 和 capacity 实验方案。
 
-计划是目标与审查依据。判断“是否已完成”时，必须对照当前 CMake、源码、测试和实际输出，不能只看计划标题或以前模型的总结。
+计划是审查依据，不是完成证明；以当前 CMake、源码、测试和 exact 实验为事实。

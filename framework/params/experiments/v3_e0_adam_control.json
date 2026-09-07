@@ -1,5 +1,0 @@
-{
-  "description": "V3 E0: 50-iteration Adam control from the read-only H375 7% checkpoint.",
-  "command": "nsgp lab --case adaptec1 --iterations 50 --optimizer adam --step-policy control",
-  "expected_artifacts": ["params.json", "experiment.md", "trajectory.csv"]
-}

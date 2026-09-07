@@ -41,22 +41,21 @@ raw Bookshelf .pl
 ## `hpwl_adam`
 
 - 职责：使用 epsilon-active exact HPWL subgradient 产生 seed；density weight 为零。
-- 权威代码：`framework/legacy/src/hpwl.cpp`、`optimizer.cpp`，由 `placer.cpp` 驱动。
-- 模块镜像：`modules/hpwl_adam/code`；optimizer 镜像目前已落后于权威实现。
+- 阶段适配器：`modules/hpwl_adam/code/module.cpp`；共享 exact HPWL/optimizer 位于 `framework/kernel`。
 - 参数：`seed_h219_like.json`、`smoke.json`。
 - 重要边界：epsilon/active power 只影响方向，不改变 exact HPWL 报告值。
 
 ## `exact_joint_gp`
 
 - 职责：组合 exact HPWL 方向和 exact overlap 方向，以 lambda controller 和 optimizer 推进全局布局。
-- 权威代码：`framework/legacy/src/placer.cpp`、`lambda_controller.cpp`、`batch_acceptance.cpp`，并调用 HPWL/density/optimizer。
+- 权威代码：`modules/exact_joint_gp/code/placer.cpp`、`lambda_controller.cpp`、`batch_acceptance.cpp`、`module.cpp`。
 - 参数：`pure_coarse.json`、`bridge_h253_like.json`、`retighten_h254_like.json`、`smoke.json`。
 - 可选能力：net-batch direction、density direction sharing、regional price、late-stage switch、bisection/coarse flow/transport/recovery/swap 后处理。
-- 当前副作用：`global_place` 支持 snapshot 和输出目录，旧 `run` 会写盘；V3 `lab` 不调用它，而是直接使用 evaluator。
+- `global_place` 只有显式非空 output directory 时才写内部指标/snapshot；微内核模块传空路径，正常 pipeline 不产生这些副作用。
 
 ## `global_view_gp`（V3 lab 内部能力）
 
-- 位置：`framework/code/experiment_lab.cpp`，不是独立 module 目录。
+- 位置：`modules/global_view_gp/code/global_view_lab.cpp`；通过 `nsgp lab` 运行单阶段实验。
 - 输入：外部 checkpoint、512×512/target 1.0 默认 evaluator、optimizer/step 参数。
 - active ensemble：epsilon scale `{0, 0.25, 0.5, 1.0} × bin_size`。
 - 聚合：各方向 RMS normalization 后做 simplex 上的 minimum-norm convex combination。
@@ -67,17 +66,17 @@ raw Bookshelf .pl
 
 ## `global_capacity_transport`（V3 lab 内部能力）
 
-- 位置：`framework/code/experiment_lab.cpp` 的 `capacity_transport`。
+- 轻量 V3 版本位于 `modules/global_view_gp/code/global_view_lab.cpp` 的 `capacity_transport`。
 - 候选：64×64 coarse occupancy 找最大 surplus source 和最低 occupancy destination。
 - 限制：跳过宽/高超过 coarse bin 的宏；最多 24 pass。
 - 接受：每个候选都在 canonical 512×512 exact evaluator 上重新审计；overflow 必须下降，HPWL 增幅不得超过 0.2%。
 - 参数：`--capacity-transport --transport-target-percent <percent>`。
-- 这是轻量 V3 版本，与 `framework/legacy/src/transport.cpp` 的完整 transport 是不同入口；后者支持 nearest/auction/Hilbert 和更复杂原子组策略。
+- 完整独立 pipeline stage 为 `global_capacity_transport`，代码在同名模块，支持 nearest/auction/Hilbert 和更复杂原子组策略。
 
 ## `exact_recovery`
 
 - 职责：在 overflow cap 内通过 node move、net block、breakpoint、compact direction 等搜索 exact HPWL 改善。
-- 权威代码：`framework/legacy/src/recovery.cpp`、`compact_recovery.cpp`。
+- 权威代码：`modules/exact_recovery/code/recovery.cpp`、`compact_recovery.cpp`、`module.cpp`。
 - 参数：`cap15_netblock.json`、`cap07_node.json`、`cap07_full.json`。
 - 接口：`recover_hpwl_under_overflow(Database&, ExactOverlapDensity&, RecoveryConfig)`。
 - 接受与统计必须使用 exact affected HPWL 和 exact density move/group move audit。
@@ -85,7 +84,7 @@ raw Bookshelf .pl
 ## `surplus_bisection`
 
 - 职责：根据 exact capacity 将超额区域递归二分，并用位置、net 和容量启发式分配节点。
-- 权威代码：`framework/legacy/src/bisection.cpp`。
+- 权威代码：`modules/surplus_bisection/code/bisection.cpp`、`module.cpp`。
 - 参数：`h372_like.json`。
 - 常用选项：`surplus_only`、position seeded、nearest-capacity leaf、HPWL-guided leaf。
 - 它是候选布局模块，边界后仍须 canonical fresh audit。
@@ -93,20 +92,19 @@ raw Bookshelf .pl
 ## `equal_shape_swap`
 
 - 职责：在同形单元之间做 occupancy-invariant 或 exact-audited 交换，使用空间与 net-aware 候选降低 HPWL。
-- 权威代码：`framework/legacy/src/swap_recovery.cpp`。
+- 权威代码：`modules/equal_shape_swap/code/swap_recovery.cpp`、`module.cpp`。
 - 参数：`h375_like.json`。
 - 扩展能力：permutation、assignment、density-guided swap 和有限 HPWL budget。
 - equal-shape occupancy invariance 是重要回归测试点。
 
-## 其他 exact core 能力
+## 其他显式模块
 
-- `coarse_flow.cpp`：粗容量流计划与 exact 检查。
-- `transport.cpp`：excess-to-capacity relocation、原子组、auction/Hilbert、identity exchange。
-- `density_coordinate.cpp`：exact overlap coordinate descent。
+- `global_capacity_transport`：`coarse_flow.cpp`、`transport.cpp` 与 `module.cpp`，提供 excess-to-capacity relocation、原子组、auction/Hilbert、identity exchange。
+- `density_coordinate`：`density_coordinate.cpp` 与 `module.cpp`，提供 exact overlap coordinate descent。
 - `compact_recovery.cpp`：support contraction。
 - `batch_acceptance.cpp`：对 proposal batch 做 exact backtracking/接受。
 
-这些能力存在于 core，但不是当前 `main.cpp` 静态 module registry 的独立模块。暴露新模块时应新增清晰参数文件和调用链记录，不要只增加难以发现的 CLI flag。
+这些能力已经进入 `ModuleRegistry`，可直接写入 pipeline。新模块同样必须新增清晰参数文件和调用链记录，不要只增加难以发现的 CLI flag。
 
 ## `historical_dct_poisson`
 

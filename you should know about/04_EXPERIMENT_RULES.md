@@ -32,7 +32,7 @@ debug/
 
 只有用户明确要求某个阶段布局时，才允许 `--save-stage <stage>` 生成 `saved/<stage>.pl`。外部输入 checkpoint 只记录绝对路径和 SHA-256，不复制到实验目录。
 
-旧 `nsgp run` 和历史 replay 仍会产生 `.pl` 和日志；它们只应用于兼容/复现。新算法实验不要沿用其重产物方式。
+`nsgp run` 与 `nsgp lab` 都默认遵守 metrics-only。只有 `modules/historical_exact_replay` 和 `historical_dct_poisson` 的显式历史复现仍会产生较多 `.pl` 和日志；新算法实验不要沿用其重产物方式。
 
 ## 2. `run_id` 和实验名字
 
@@ -64,7 +64,7 @@ debug/
 - NaN/Inf、异常退出、早停、bundle/optimizer reset 等关键事件；
 - 是否显式保留布局，以及原因。
 
-当前 `lab` 的 `params.json`/`experiment.md` 尚未实现上面全部字段，后续应按 `05_CURRENT_STATE.md` 的缺口补齐。任何时候都不能因为当前 writer 缺字段而省略实验笔记。
+微内核 pipeline 会记录解析后的 module chain、参数、输入 hash（若有）、exact evaluator、threads 和 retention；global-view lab 还记录 optimizer、step 与 acceptance。Git dirty 状态目前仍为 `not_checked`。
 
 ## 4. 调用链格式
 
@@ -126,7 +126,7 @@ experiment:E17/saved/capacity_slack.pl
 4. external input safety：实验前后 checkpoint SHA-256 相同。
 5. handoff correctness：内存交接与临时 `.pl` round trip 的 exact metrics 一致。
 
-当前 `tests/test_v3_retention_contract.ps1` 只覆盖第 1 项和 percentage 字段的基本检查，其余仍需补齐。
+当前覆盖：PowerShell retention 测试验证 metrics-only、显式 stage save、外部 checkpoint 当前 hash 和临时 workspace 清理；C++ 数值测试验证 placement round trip 的坐标与 exact HPWL。异常 smoke 还验证错误退出后 workspace 不残留。后续仍应把这些 smoke 全部注册进自动 CTest。
 
 ## 9. Git 中保存什么
 

@@ -6,7 +6,7 @@
 - 数据集默认目录：`D:\codex_project\HUAWEI_EDA\alg-electronic\ispd2005`
 - GitHub：`https://github.com/Bowen-Yuan/HUAWEI_EDA_GP.git`
 - 当前开发分支：`nonsmooth-gp-v1`
-- 当前已记录基线提交：`4830135 feat: add V3 retained global-view experiments`
+- 架构基线：registry-driven microkernel；实际提交以 `git rev-parse HEAD` 为准。
 - 默认开发 case：`adaptec1`
 - 完整 case：`adaptec1..4`、`bigblue1..4`；除非明确要求，不要日常全量运行八个 case。
 
@@ -28,7 +28,7 @@ rg -n "selected\.pl|snapshot|write_bookshelf_placement|output_dir|trajectory" fr
 ## 当前最短开发路径
 
 1. 先读本目录全部 Markdown。
-2. 根据任务定位权威实现：当前 CMake 真正编译的是 `framework/legacy/src`，不要误把 `modules/*/code` 的镜像当作唯一实现。
+2. 根据任务定位权威实现：共享数值内核在 `framework/kernel`；优化阶段的权威代码在 `modules/<stage>/code`。
 3. 只改完成任务所需的最小范围。
 4. 编译并先跑数值契约测试或 1 轮 smoke。
 5. 正式实验默认用 `adaptec1`，从相同输入 checkpoint 和相同 SHA-256 开始。
@@ -50,9 +50,9 @@ ctest --test-dir build -C Release --output-on-failure
 
 主要目标：
 
-- `nsgp`：普通 pipeline、audit、batch 和 V3 `lab` 入口。
+- `nsgp`：微内核 pipeline、audit、batch 和 `global_view_gp` 的 `lab` 入口。
 - `nsgp_tests`：exact HPWL/density 小型数值契约测试。
-- `nsgp_legacy_stage`：历史 exact 阶段复现工具，会产生较多中间文件。
+- `nsgp_legacy_stage`：位于 `modules/historical_exact_replay` 的兼容目标，会产生较多中间文件。
 - `nsgp_historical_homotopy`：历史 DCT/Poisson 复现工具，不能进入正式 non-smooth pipeline。
 
 ## 最常用命令
@@ -64,7 +64,7 @@ build\Release\nsgp.exe list-modules
 # 权威指标审计；输出 overflow_percent
 build\Release\nsgp.exe audit --case adaptec1 --placement <placement.pl>
 
-# 旧的组合 pipeline；注意它仍会保存阶段 placement 和 manifest
+# 模块组合 pipeline；默认同样是 metrics-only
 build\Release\nsgp.exe run --case adaptec1 --pipeline framework\params\pipelines\smoke.json --threads 1
 
 # V3 metrics-only 实验入口
