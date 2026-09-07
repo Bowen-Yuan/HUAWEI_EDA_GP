@@ -1,5 +1,6 @@
 /build/
 *.exe
+*.o
 *.pdb
 framework/results/**
 !framework/results/.gitkeep
