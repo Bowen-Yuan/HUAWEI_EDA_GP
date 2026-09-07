@@ -70,3 +70,6 @@
 - Git：`a64dc60`。
 - Changed：建立 C++17/OpenMP 项目、exact core、静态模块 runner、JSON 参数、测试和空结果目录。
 - Contract impact：确立 exact HPWL/density 与模块化研究主干。
+- Changed：`exact_joint_gp` 模块 JSON 参数面扩展（optimizer.name/beta、lambda.policy/update_interval/
+  trajectory_horizon/stop_overflow、log_every、adaptive_epsilon），支持 trajectory-lambda 纯下降实验；
+  新增 V5 h221 续跑 7-optimizer 对照（见 05_CURRENT_STATE 3.2）。

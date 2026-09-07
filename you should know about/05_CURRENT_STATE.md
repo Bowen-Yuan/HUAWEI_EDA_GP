@@ -116,6 +116,32 @@ E 系列（200 轮）：
 4. 结构性限制：density direction 最小化 energy（平方超额），不保证降低 overflow_ratio；恢复期提案
    常表现为 energy 下降而 overflow 不降，从而被 exact_funnel 拒绝。
 
+## 3.2 V5 h221 续跑实验（trajectory-lambda 纯下降，无逐步接受机制）
+
+起点改为历史链中间 checkpoint `h221_dct_poisson_512/best.pl`（DCT/Poisson 同伦 512 精化，历史平滑
+代理；SHA-256 `9d0bd999...`）。canonical 加载 + clamp 后 exact audit 为 HPWL 109,837,622.009 /
+overflow 7.8193%（与 legacy 链一致）。注意：该 .pl 有 480 个可动节点共 23.3% 面积在 die 外；
+无 clamp 的 `nsgp audit` CLI 会得到 11.52% 的伪影值，不是 pipeline 语义。
+
+协议：`exact_joint_gp`，batch acceptance 关闭（每步无条件移动），lambda 用 `trajectory` 策略
+（overflow 相对 smoothstep 目标轨迹的 PI 反馈，interval 5，horizon 100，stop 0.07），lr 0.002，
+100 轮，threads=1。7 optimizer 对照（run id 前缀 `20260908_0100_adaptec1_h221traj_`）：
+
+| Optimizer | best-feasible HPWL | overflow | 首次 ≤7% | λ 峰值 |
+|---|---:|---:|---:|---:|
+| amsgrad | **99,136,915.82** | 5.4217% | 54 | 51 |
+| adam | 99,960,810.50 | 5.5886% | 56 | 51 |
+| adagrad | 101,850,109.32 | 6.9879% | 75 | 130 |
+| dual-averaging | 105,949,370.15 | 6.9907% | 96 | 131 |
+| sgd | 108,191,594.03 | 5.2690% | 10 | 3.2 |
+| heavy-ball | 108,228,173.46 | 5.2480% | 11 | 3.3 |
+| normalized-sgd | 108,985,009.69 | 4.9752% | 21 | 3.4 |
+
+结论：overflow 反馈 lambda 的纯下降机制可行——无任何逐步接受/回溯，7 个 optimizer 全部回到 ≤7%，
+HPWL 改善 −1.6% 到 −9.7%；逐坐标自适应步长（amsgrad/adam）在该机制下显著占优，且 amsgrad 在
+第 99 轮仍在下降。原始子梯度步长几乎不动布局（λ 无需超过 3.4）。曲线与数据在
+`framework/results/analysis/20260908_h221traj_optimizer_screen/`（本地，不入库）。
+
 ## 4. 本次微内核回归证据
 
 - 模块权威构建 smoke：`layout_init → hpwl_adam → exact_joint_gp` 可运行。

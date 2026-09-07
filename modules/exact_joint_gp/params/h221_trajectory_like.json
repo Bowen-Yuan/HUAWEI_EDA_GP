@@ -1,0 +1,16 @@
+{
+  "iterations": 100,
+  "hpwl_direction": { "epsilon": 125.0, "active_power": 4.0, "degree_limit": 100 },
+  "optimizer": { "name": "adam", "learning_rate": 0.002, "maximum_delta": 4.0 },
+  "lambda": {
+    "policy": "trajectory",
+    "density_weight_scale": 0.5,
+    "update_interval": 5,
+    "trajectory_horizon": 100,
+    "stop_overflow": 0.07
+  },
+  "selector": { "mode": "lowest_hpwl_under_overflow_cap", "overflow_cap": 0.07 },
+  "log_every": 1,
+  "adaptive_epsilon": false
+}
+
