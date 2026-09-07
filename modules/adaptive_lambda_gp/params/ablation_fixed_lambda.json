@@ -1,0 +1,20 @@
+{
+  "notes": "Experiment A3: identical to adam_trust.json except lambda stays fixed at 0.25.",
+  "iterations": 50,
+  "direction": {
+    "active_ensemble": true,
+    "epsilon_bin_scales": [0.0, 0.25, 0.5, 1.0],
+    "active_power": 1.0
+  },
+  "optimizer": { "name": "adam", "learning_rate": 0.02 },
+  "step_policy": { "name": "trust", "trust_radius_bins": 1.0, "max_backtracks": 9 },
+  "lambda_policy": {
+    "name": "fixed",
+    "initial": 0.25,
+    "explore_overflow_percent": 15.0,
+    "final_overflow_percent": 7.0,
+    "hard_overflow_percent": 16.0
+  },
+  "acceptance": { "policy": "exact_funnel" },
+  "reset": { "reject_streak": 4, "lambda_ratio": 4.0, "reset_on_final_lock": true }
+}

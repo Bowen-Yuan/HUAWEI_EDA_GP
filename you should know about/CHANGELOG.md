@@ -2,6 +2,34 @@
 
 这里记录影响后续接手者判断的架构、算法、实验协议和关键数值结果。它不是 Git commit 日志的复制品。
 
+## 2026-09-08 — Adaptive lambda GP stage 与可组装 step policy（V4 方案执行）
+
+- Git：基于 `cca2e8b` 开发，最终提交见 Git 历史，分支 `nonsmooth-gp-v1`。
+- Changed：新增共享 `ea::StepController`（constant/cosine/trust，`framework/kernel/src/step_policy.*`，
+  复用 `ea::Optimizer`，未建第二套 optimizer hierarchy）；新增 `adaptive_lambda_gp` stage
+  （overflow funnel + log-domain PI(D) lambda + exact funnel acceptance + 内存内 best-feasible restore；
+  wire 与 density direction 分别 RMS normalize）。未改动任何既有模块的算法行为。
+- Tests：新增 `tests/test_adaptive_lambda_contracts.cpp`（CTest 目标 `nsgp_adaptive_lambda_contracts`）：
+  step policy 单调/bounds、lambda controller 合成 Case A–E、funnel acceptance 四象限、合成 3-cell 布局上
+  的 explore-accept + restore、infeasible-input 抛错、7 optimizer × 3 step policy finite/bounded/reset
+  可复现 smoke；`nsgp_tests` 全部通过。
+- Build：新增 `scripts/build_manual_gcc.ps1`（无 CMake 机器的手工 MinGW 构建，目标与 CMakeLists
+  一一对应；Git 元数据经 forced-include 头注入）。
+- Numerical evidence（canonical checkpoint SHA ba0fd17e…，512×512/1.0，threads=1，seed 219，
+  metrics-only，21 个实验目录全部通过 retention 契约，输入 hash 前后不变）：
+  A0 strict-cap 对照 50 轮只沿容差边界移动 −3.51 HPWL；
+  A1/A2/A3（50 轮）证明收益来自 corridor 而非新代码路径，但 50 轮内 recovery 未成功；
+  B/C optimizer 筛选中 dual-averaging 探索最强且唯一尝试回收；
+  **D 系列 100 轮 dual-averaging/constant 得到 best-feasible HPWL 85,445,335.249799 @ 6.8253943126%，
+  相对输入 −553,983.06（−0.644%，material improvement）**；200 轮 E 系列改善反而较小（−0.349%）。
+  Adam 系全部能探索但 recovery 失败；cosine step 未回收。
+- Contract impact：exact HPWL/density 公式不变；overflow 仍以百分比输出；metrics-only retention 不变；
+  stage 边界输出无条件为 canonical feasible（≤ final + 1e-9），输入在 final 目标下不可行时显式抛错。
+- Documentation updated：02、03、05、07 与本文件。
+- Remaining gaps：recovery 失败的结构性根因（density direction 最小化 energy 而非 overflow）待解决；
+  SHA-256 仍为 Windows-only；constant 与 trust 等价说明 trust 机制在该 stage 未发挥作用；
+  证据仅限 adaptec1 单 case，未做八 case 与 threads=8 复核。
+
 ## 2026-09-07 — 收敛为轻量微内核与真实 stage modules
 
 - Git：基于 `00c0780` 开发，最终提交见 Git 历史，分支 `nonsmooth-gp-v1`。

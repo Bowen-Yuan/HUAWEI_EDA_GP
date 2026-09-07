@@ -1,0 +1,33 @@
+{
+  "iterations": 50,
+  "direction": {
+    "active_ensemble": true,
+    "epsilon_bin_scales": [0.0, 0.25, 0.5, 1.0],
+    "active_power": 1.0
+  },
+  "optimizer": { "name": "adam", "learning_rate": 0.02 },
+  "step_policy": { "name": "trust", "trust_radius_bins": 1.0, "max_backtracks": 9 },
+  "lambda_policy": {
+    "name": "funnel_pid",
+    "initial": 0.25,
+    "minimum": 0.03,
+    "maximum": 16.0,
+    "update_interval": 5,
+    "kp": 0.20,
+    "ki": 0.02,
+    "kd": 0.10,
+    "explore_overflow_percent": 15.0,
+    "final_overflow_percent": 7.0,
+    "hard_overflow_percent": 16.0,
+    "hold_fraction": 0.20,
+    "contract_end_fraction": 0.75
+  },
+  "acceptance": {
+    "policy": "exact_funnel",
+    "hpwl_tolerance_relative": 1e-12,
+    "overflow_improvement_epsilon_percent": 0.002,
+    "recovery_step_hpwl_budget_percent": 0.05,
+    "recovery_total_hpwl_budget_percent": 0.30
+  },
+  "reset": { "reject_streak": 4, "lambda_ratio": 4.0, "reset_on_final_lock": true }
+}

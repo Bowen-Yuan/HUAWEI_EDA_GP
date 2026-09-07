@@ -47,6 +47,9 @@ microkernel.cpp               # 注册一行
 - `src/hpwl.cpp`：exact weighted pin-offset HPWL 与 active direction。
 - `src/density.cpp`：exact rectangle/bin occupancy、overflow、energy 和 incremental audit。
 - `src/optimizer.cpp`：统一 optimizer 实现。
+- `src/step_policy.cpp`：轻量 step controller（constant / cosine / trust），只决定 learning rate 和
+  per-step maximum delta；acceptance 和 backtracking 仍在调用方，保证所有 optimizer 对比共享同一个
+  exact 接受契约。
 
 ### `framework/code/microkernel.hpp/.cpp`
 
@@ -83,6 +86,7 @@ microkernel.cpp               # 注册一行
 | `global_capacity_transport` | `coarse_flow.cpp`、`transport.cpp`、`module.cpp` | coarse 候选与 exact-audited transport |
 | `density_coordinate` | `density_coordinate.cpp`、`module.cpp` | exact density coordinate search |
 | `global_view_gp` | `global_view_lab.cpp/.hpp` | 普通 registry stage；active ensemble、bundle、backtracking/trust；兼容薄 `lab` 入口 |
+| `adaptive_lambda_gp` | `adaptive_lambda_gp.cpp/.hpp`、`module.cpp` | 探索型 dynamic-lambda GP；overflow funnel + log-domain PI(D) lambda + exact funnel acceptance + 内存内 best-feasible restore |
 | `historical_exact_replay` | `legacy_stage_main.cpp` | 历史 exact CLI 兼容入口 |
 | `historical_dct_poisson` | 独立 Bookshelf/electric/spectral/homotopy 代码 | 只做历史 smooth 复现 |
 
@@ -93,6 +97,8 @@ microkernel.cpp               # 注册一行
 - `nsgp_numeric_kernel`：四个 framework 数值原语 + 各模块算法源；名称表示共享链接单元，不表示固定算法流程。
 - `nsgp`：微内核 CLI、模块适配器和复用同一 stage 实现的 global-view lab 入口。
 - `nsgp_tests`：exact 数值和 placement round-trip 契约。
+- `nsgp_adaptive_tests`：step policy、funnel lambda controller、funnel acceptance、best-feasible
+  restore 和 optimizer × step policy 组合的 synthetic 契约测试（不需要 benchmark 数据）。
 - `nsgp_legacy_stage`：历史 exact 兼容目标，源码在 module 目录。
 - `nsgp_historical_homotopy`：历史 DCT/Poisson 目标。
 

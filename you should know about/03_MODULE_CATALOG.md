@@ -65,6 +65,33 @@ raw Bookshelf .pl
 - 输出：best feasible 指标；布局默认不持久化。
 - 1 轮同参数回归中，registry stage 与 lab 的末态 exact 指标一致到打印精度；历史 50 轮实验仍显示严格 7% 边界下 E0/E5 零接受步，详见当前状态文档。
 
+## `adaptive_lambda_gp`
+
+- 职责：从 canonical feasible checkpoint 出发，允许搜索临时进入 >7% overflow 区域换取 HPWL 探索，
+  再用动态 lambda 与逐渐收紧的 overflow funnel 把搜索拉回 7%。
+- 权威代码：`modules/adaptive_lambda_gp/code/adaptive_lambda_gp.hpp`（纯策略逻辑，header-only，可被
+  synthetic 测试直接包含）、`adaptive_lambda_gp.cpp`（布局搜索）、`module.cpp`（registry 适配器与 JSON 解析）。
+- 方向：wire（epsilon-active ensemble，各 RMS normalize 后 simplex 最小范数组合）与 exact overlap
+  density direction 分别 RMS normalize，组合为 normalize(wire + lambda * density)，因此 lambda 是
+  无量纲方向权重。
+- Lambda：模块私有 `FunnelLambdaController`（不改动 `exact_joint_gp` 的 controller）。corridor 由
+  explore 高度 smoothstep 收缩到 final（默认 hold 0.20、lock 0.75）；每 `update_interval` 轮做
+  log-domain PI(D) 更新（百分比尺度误差、积分 clamp ±4、log-step clamp [-0.35, 0.55]）；final lock
+  且 overflow > final 时额外乘 exp(clamp(0.10·误差, 0, 0.25))。`name: "fixed"` 表示 fixed-lambda 消融。
+- Acceptance：`exact_funnel`——candidate 先做 canonical fresh exact audit；overflow > hard ceiling
+  （默认 16%）必拒；current 在 corridor 内为探索模式（candidate ≤ corridor 且 HPWL 严格下降），否则为
+  恢复模式（overflow 至少改善 0.002%、单步 HPWL 代价 ≤ 0.05%、累计 ≤ 初始 HPWL 的 0.30%）。所有
+  optimizer/step policy 共用同一 9 次二分 exact backtracking。
+- Best-feasible 保底：iteration 0 的 checkpoint 即为内存内 fallback；任何 canonical feasible
+  （≤ final + 1e-9）且 HPWL 更好的状态都保存 movable 坐标；stage 结束无条件 restore + clamp + fresh
+  audit。若输入本身在 final 目标下不可行，stage 显式抛错而不是输出 >7% 布局。
+- Optimizer reset：reject_streak ≥ 4、lambda 比值 ≥ 4、进入 final lock 各触发一次；不重置 lambda
+  controller。JSON 可选 7 种 optimizer 与 3 种 step policy（constant/cosine/trust）。
+- 产物：metrics-only 三文件；stage 结束向 stdout 打印 initial/best-any/best-feasible/
+  last-before-restore/final-selected、maximum excursion、iterations above 10%、first return iteration、
+  optimizer resets 与 lambda 初值/峰值/末值；`verbose: true` 时附加逐轮 key=value 遥测（仅 stdout，
+  不落盘）。输入 checkpoint 必须在 final target 下 feasible。
+
 ## `global_capacity_transport`（V3 lab 内部能力）
 
 - 轻量 V3 版本位于 `modules/global_view_gp/code/global_view_lab.cpp` 的 `capacity_transport`。

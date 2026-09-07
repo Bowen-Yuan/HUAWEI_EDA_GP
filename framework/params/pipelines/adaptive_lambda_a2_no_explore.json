@@ -1,0 +1,16 @@
+{
+  "name": "adaptive_lambda_a2_no_explore",
+  "compliance_mode": "challenge_nonsmooth",
+  "experiment": {
+    "purpose": "A2 ablation: corridor locked at 7% to remove mid-run infeasible exploration",
+    "hypothesis": "if A1 beats A2, the gain comes from exploration rather than the new code path",
+    "parent_chain": ["external:H375/global.pl"]
+  },
+  "density": { "bins_x": 512, "bins_y": 512, "target_density": 1.0 },
+  "stages": [
+    {
+      "module": "adaptive_lambda_gp",
+      "config": "../../../modules/adaptive_lambda_gp/params/ablation_no_explore.json"
+    }
+  ]
+}

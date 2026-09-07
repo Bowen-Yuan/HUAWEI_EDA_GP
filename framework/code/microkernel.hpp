@@ -92,6 +92,7 @@ void register_equal_shape_swap(ModuleRegistry& registry);
 void register_global_capacity_transport(ModuleRegistry& registry);
 void register_density_coordinate(ModuleRegistry& registry);
 void register_global_view_gp(ModuleRegistry& registry);
+void register_adaptive_lambda_gp(ModuleRegistry& registry);
 }
 
 ModuleRegistry make_default_registry();

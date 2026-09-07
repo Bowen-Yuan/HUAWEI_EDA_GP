@@ -9,7 +9,8 @@ set(NUMERIC_KERNEL_SOURCES
   framework/kernel/src/bookshelf.cpp
   framework/kernel/src/density.cpp
   framework/kernel/src/hpwl.cpp
-  framework/kernel/src/optimizer.cpp)
+  framework/kernel/src/optimizer.cpp
+  framework/kernel/src/step_policy.cpp)
 set(MODULE_ALGORITHM_SOURCES
   modules/exact_joint_gp/code/batch_acceptance.cpp
   modules/exact_joint_gp/code/lambda_controller.cpp
@@ -43,6 +44,10 @@ target_sources(nsgp PRIVATE
   modules/global_capacity_transport/code/module.cpp
   modules/density_coordinate/code/module.cpp)
 target_include_directories(nsgp PRIVATE modules/global_view_gp/code)
+target_sources(nsgp PRIVATE
+  modules/adaptive_lambda_gp/code/adaptive_lambda_gp.cpp
+  modules/adaptive_lambda_gp/code/module.cpp)
+target_include_directories(nsgp PRIVATE modules/adaptive_lambda_gp/code)
 target_link_libraries(nsgp PRIVATE nsgp_numeric_kernel)
 if(WIN32)
   target_link_libraries(nsgp PRIVATE Advapi32)
@@ -91,3 +96,10 @@ enable_testing()
 add_executable(nsgp_tests tests/test_numeric_contracts.cpp)
 target_link_libraries(nsgp_tests PRIVATE nsgp_numeric_kernel)
 add_test(NAME nsgp_numeric_contracts COMMAND nsgp_tests)
+
+add_executable(nsgp_adaptive_tests tests/test_adaptive_lambda_contracts.cpp)
+target_sources(nsgp_adaptive_tests PRIVATE
+  modules/adaptive_lambda_gp/code/adaptive_lambda_gp.cpp)
+target_link_libraries(nsgp_adaptive_tests PRIVATE nsgp_numeric_kernel)
+target_include_directories(nsgp_adaptive_tests PRIVATE modules/adaptive_lambda_gp/code)
+add_test(NAME nsgp_adaptive_lambda_contracts COMMAND nsgp_adaptive_tests)

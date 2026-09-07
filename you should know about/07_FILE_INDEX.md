@@ -24,6 +24,8 @@
 - `src/hpwl.cpp`：exact HPWL 与 active direction。
 - `src/density.cpp`：exact density/overflow、node/group incremental audit。
 - `src/optimizer.cpp`：Adam、AMSGrad、AdaGrad、HeavyBall、SGD、NormalizedSGD、DualAveraging。
+- `src/step_policy.hpp/.cpp`：StepController（constant/cosine/trust）、StepDecision、StepObservation、
+  parse_step_policy / make_step_controller。
 
 `framework/legacy` 已移除，不再是构建权威。
 
@@ -40,6 +42,12 @@
 - `global_capacity_transport`：权威 coarse flow、transport、stage adapter 和基础参数。
 - `density_coordinate`：权威 coordinate search、stage adapter 和基础参数。
 - `global_view_gp`：普通 registry stage 与薄 `lab` 入口共用 `global_view_lab.cpp` 的搜索实现；含 control/active-bundle/smoke 参数。
+- `adaptive_lambda_gp`：`code/adaptive_lambda_gp.hpp`（FunnelLambdaConfig/Controller、
+  FunnelAcceptanceConfig 与 funnel_accept、AdaptiveLambdaOptions/RunStats 纯逻辑）、
+  `code/adaptive_lambda_gp.cpp`（搜索实现）、`code/module.cpp`（registry 适配器与 JSON 解析）；
+  `params/smoke.json`、`adam_trust.json`（A1 基线）、`adam_trust_verbose.json`（逐轮遥测诊断）、
+  `ablation_no_explore.json`（A2）、`ablation_fixed_lambda.json`（A3）、`optimizer_screen.json`
+  （B 筛选模板）、`params/README.md`（字段单位说明）。
 - `historical_exact_replay`：历史 exact CLI 源，保留 target 名 `nsgp_legacy_stage` 以兼容脚本。
 - `historical_dct_poisson`：独立 Bookshelf/electric/spectral/homotopy 历史 smooth 模块。
 
@@ -52,17 +60,25 @@
 - `pipelines/smoke.json`：32×32 三阶段结构 smoke。
 - `pipelines/reference_nonsmooth_chain.json`：64×64 六模块组合示例。
 - `pipelines/global_view_smoke.json`：从显式外部 checkpoint 运行 canonical 512×512/1.0 `global_view_gp` 的一轮结构回归。
+- `pipelines/adaptive_lambda_smoke.json`、`pipelines/adaptive_lambda_gp.json`、
+  `pipelines/adaptive_lambda_a2_no_explore.json`、`pipelines/adaptive_lambda_a3_fixed_lambda.json`、
+  `pipelines/global_view_a0_control.json`：adaptive-lambda 阶段与 A0–A3 实验入口。
 
 V3 global-view 示例参数已经归入 `modules/global_view_gp/params`，不再在 framework 复制一份。
 
 ## `scripts`
 
 - `run_h375_replay.ps1`：历史 H219→H375 重产物复现脚本；不作为新实验模板。
+- `build_manual_gcc.ps1`：无 CMake 环境的手工 MinGW 构建；目标与 CMakeLists.txt 一一对应，Git 元数据
+  经生成的 forced-include 头注入（PowerShell 会破坏 -D 宏的内嵌引号）。
 
 ## `tests`
 
 - `test_numeric_contracts.cpp`：exact HPWL/density 小例及 placement round trip。
 - `test_v3_retention_contract.ps1`：成功/失败三文件、百分比字段、显式 save、两种外部 input schema 的 hash、workspace cleanup 检查。
+- `test_adaptive_lambda_contracts.cpp`：step policy、lambda controller（合成 Case A–E）、funnel
+  acceptance、best-feasible restore（合成 3-cell 布局）、7×3 optimizer×step smoke、配置校验负例；
+  注册为 CTest 目标 nsgp_adaptive_lambda_contracts。
 
 ## `plan`
 

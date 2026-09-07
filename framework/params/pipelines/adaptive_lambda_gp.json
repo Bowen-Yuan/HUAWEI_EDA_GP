@@ -1,0 +1,16 @@
+{
+  "name": "adaptive_lambda_gp",
+  "compliance_mode": "challenge_nonsmooth",
+  "experiment": {
+    "purpose": "adaptive-lambda exploratory global placement from the canonical H375 checkpoint",
+    "hypothesis": "temporary overflow exploration with a dynamic lambda funnel finds lower feasible HPWL than the strict 7% cap",
+    "parent_chain": ["external:H375/global.pl"]
+  },
+  "density": { "bins_x": 512, "bins_y": 512, "target_density": 1.0 },
+  "stages": [
+    {
+      "module": "adaptive_lambda_gp",
+      "config": "../../../modules/adaptive_lambda_gp/params/adam_trust.json"
+    }
+  ]
+}

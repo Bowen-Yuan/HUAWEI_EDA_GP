@@ -188,6 +188,7 @@ ModuleRegistry make_default_registry() {
     modules::register_global_capacity_transport(registry);
     modules::register_density_coordinate(registry);
     modules::register_global_view_gp(registry);
+    modules::register_adaptive_lambda_gp(registry);
     return registry;
 }
 

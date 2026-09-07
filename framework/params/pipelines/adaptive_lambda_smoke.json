@@ -1,0 +1,16 @@
+{
+  "name": "adaptive_lambda_smoke",
+  "compliance_mode": "challenge_nonsmooth",
+  "experiment": {
+    "purpose": "structural smoke for the adaptive_lambda_gp stage",
+    "hypothesis": "the stage restores a canonical-feasible best and honors the metrics-only contract",
+    "parent_chain": ["external:H375/global.pl"]
+  },
+  "density": { "bins_x": 512, "bins_y": 512, "target_density": 1.0 },
+  "stages": [
+    {
+      "module": "adaptive_lambda_gp",
+      "config": "../../../modules/adaptive_lambda_gp/params/smoke.json"
+    }
+  ]
+}
