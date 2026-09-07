@@ -35,8 +35,8 @@ raw Bookshelf .pl
 - 职责：创建起始布局；保留 fixed nodes。
 - 模式：`raw` 或 `center_gaussian`。
 - 参数：`modules/layout_init/params/raw.json`、`center_gaussian_219.json`。
-- 当前执行位置：`framework/code/main.cpp` 调用 `read_bookshelf` 或 `initialize_center_gaussian`。
-- 输出：内存中的 `ea::Database` 布局；旧 runner 会额外写 stage placement。
+- 当前执行位置：runner 只负责 `read_bookshelf`；`modules/layout_init/code/module.cpp` 处理 raw 或 `initialize_center_gaussian` 策略。
+- 输出：内存中的 `ea::Database` 布局；只有显式 `--save-stage layout_init` 才保留 placement。
 
 ## `hpwl_adam`
 
@@ -53,16 +53,17 @@ raw Bookshelf .pl
 - 可选能力：net-batch direction、density direction sharing、regional price、late-stage switch、bisection/coarse flow/transport/recovery/swap 后处理。
 - `global_place` 只有显式非空 output directory 时才写内部指标/snapshot；微内核模块传空路径，正常 pipeline 不产生这些副作用。
 
-## `global_view_gp`（V3 lab 内部能力）
+## `global_view_gp`
 
-- 位置：`modules/global_view_gp/code/global_view_lab.cpp`；通过 `nsgp lab` 运行单阶段实验。
+- 位置：`modules/global_view_gp/code/global_view_lab.cpp`；已注册为普通 `StageFunction`，可在 JSON pipeline 中重复、删除、重排。
+- 入口：组合实验使用 `nsgp run`；`nsgp lab` 只是复用同一搜索函数的单阶段便捷入口，不是第二套算法。
 - 输入：外部 checkpoint、512×512/target 1.0 默认 evaluator、optimizer/step 参数。
 - active ensemble：epsilon scale `{0, 0.25, 0.5, 1.0} × bin_size`。
 - 聚合：各方向 RMS normalization 后做 simplex 上的 minimum-norm convex combination。
 - temporal bundle：最多四个方向，bundle mix 默认 0.5；连续 reject 会清空历史并重置 optimizer。
 - 接受：canonical exact audit、严格 overflow cap、HPWL 必须下降；最多九次二分回溯。
 - 输出：best feasible 指标；布局默认不持久化。
-- 当前实验显示严格 7% 边界下 E0/E5 零接受步，详见当前状态文档。
+- 1 轮同参数回归中，registry stage 与 lab 的末态 exact 指标一致到打印精度；历史 50 轮实验仍显示严格 7% 边界下 E0/E5 零接受步，详见当前状态文档。
 
 ## `global_capacity_transport`（V3 lab 内部能力）
 

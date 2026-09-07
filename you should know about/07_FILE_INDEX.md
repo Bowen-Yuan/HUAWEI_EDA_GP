@@ -39,7 +39,7 @@
 - `equal_shape_swap`：权威 swap recovery、stage adapter 和 H375-like 参数。
 - `global_capacity_transport`：权威 coarse flow、transport、stage adapter 和基础参数。
 - `density_coordinate`：权威 coordinate search、stage adapter 和基础参数。
-- `global_view_gp`：`global_view_lab.cpp/.hpp`、control/active-bundle 参数；目前为专用 lab stage。
+- `global_view_gp`：普通 registry stage 与薄 `lab` 入口共用 `global_view_lab.cpp` 的搜索实现；含 control/active-bundle/smoke 参数。
 - `historical_exact_replay`：历史 exact CLI 源，保留 target 名 `nsgp_legacy_stage` 以兼容脚本。
 - `historical_dct_poisson`：独立 Bookshelf/electric/spectral/homotopy 历史 smooth 模块。
 
@@ -51,6 +51,7 @@
 - `cases.json`：默认与完整 case 清单。
 - `pipelines/smoke.json`：32×32 三阶段结构 smoke。
 - `pipelines/reference_nonsmooth_chain.json`：64×64 六模块组合示例。
+- `pipelines/global_view_smoke.json`：从显式外部 checkpoint 运行 canonical 512×512/1.0 `global_view_gp` 的一轮结构回归。
 
 V3 global-view 示例参数已经归入 `modules/global_view_gp/params`，不再在 framework 复制一份。
 
@@ -61,7 +62,7 @@ V3 global-view 示例参数已经归入 `modules/global_view_gp/params`，不再
 ## `tests`
 
 - `test_numeric_contracts.cpp`：exact HPWL/density 小例及 placement round trip。
-- `test_v3_retention_contract.ps1`：三文件、百分比字段、显式 save、外部 hash、workspace cleanup 检查。
+- `test_v3_retention_contract.ps1`：成功/失败三文件、百分比字段、显式 save、两种外部 input schema 的 hash、workspace cleanup 检查。
 
 ## `plan`
 

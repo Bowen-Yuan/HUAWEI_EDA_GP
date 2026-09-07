@@ -15,7 +15,10 @@
 - `global_place` 收到空 output path 时不写 metrics、snapshot 或 `last.pl`。
 - `lab --threads` 会实际设置 OpenMP；pipeline 在入口统一设置 threads。
 - pipeline params 记录完整解析后 module chain；lab params/summary 记录输入 hash、optimizer、step、acceptance、best/last、runtime 和搜索统计。
+- `global_view_gp` 已作为普通 registry stage 接入 JSON pipeline；`nsgp lab` 与该 stage 复用同一搜索实现。
 - retention 测试覆盖正常三文件、显式 stage save、外部 hash 和 workspace cleanup；数值测试覆盖 placement round trip。
+- pipeline 和 lab 在搜索异常时也保留三文件 metrics-only 失败摘要；无已完成阶段时允许只有 CSV 表头。
+- CMake 构建会记录 Git remote/branch/commit 和配置时 tracked-worktree dirty 状态；pipeline 可透传顶层 `experiment` 研究元数据。
 
 当前注册模块：
 
@@ -28,7 +31,7 @@ surplus_bisection
 equal_shape_swap
 global_capacity_transport
 density_coordinate
-global_view_gp       # 通过 lab 单阶段入口
+global_view_gp
 ```
 
 历史 DCT/Poisson 和 historical exact replay 保持隔离。
@@ -67,23 +70,23 @@ canonical evaluator：512×512，target density 1.0。
 - `lab` 1 轮、2 threads：HPWL `85,999,279.708727`，overflow `6.9999980678266%`，1 accepted；输入 SHA-256 前后不变。
 - invalid optimizer 异常 smoke：exit 1，`%TEMP%/nonsmooth-gp/<run_id>` 不残留。
 - C++ numeric/placement round-trip contracts 通过。
+- `global_view_gp` registry/lab 同参数回归（1 轮、2 threads、active ensemble + bundle）末态均为 HPWL `85,999,318.311948`、overflow `6.99999030053%`，该步被 exact 接受规则拒绝；两份结果均通过三文件 retention 检查。
+- 未知模块失败 smoke：exit 1，仍生成 `params.json`、带百分比表头的 `trajectory.csv` 和 `status: failed` 的 `experiment.md`；retention 检查通过。
 
 这些是结构和回归 smoke，不替代新的 50 轮公平算法对照。
 
 ## 5. 剩余缺口
 
-1. `global_view_gp` 已物理归入模块目录，但仍通过专用 `lab` CLI，而不是普通 JSON pipeline 的 `StageFunction`；若需要与其他阶段任意重排，应提取为同一 registry adapter。
-2. `nsgp_numeric_kernel` 为减少链接复杂度仍同时编译共享 kernel 和模块算法源；物理所有权已正确，但可进一步使用小型 object libraries，前提是确有编译收益。
-3. Git branch/commit 在 CMake configure 时记录；手工 g++ 构建显示 `unknown`。dirty state 仍为 `not_checked`。
-4. SHA-256 使用 Windows CryptoAPI；Linux 尚无实现。
-5. failure experiment 当前保证临时 workspace 清理，但失败后的持久结果摘要还不是统一的三文件失败报告。
-6. retention lifecycle smoke 尚未全部注册进 CTest/CTest fixture。
-7. global-view 仍使用固定 lambda，bundle reset 和 capacity transport 搜索尚未覆盖 V3 计划全部变体。
-8. `reference_nonsmooth_chain.json` 使用 64×64/0.9，`smoke.json` 使用 32×32/0.9；它们不是 canonical 512×512/1.0 正式实验。
+1. `nsgp_numeric_kernel` 为减少链接复杂度仍同时编译共享 kernel 和模块算法源；物理所有权已正确。不要仅为目录形式改成多层 object libraries，除非测得编译收益。
+2. Git 元数据在 CMake configure 时记录，因此 build 后又修改源码时不会自动刷新；手工 g++ 构建显示 `unknown`/`not_checked`。
+3. SHA-256 使用 Windows CryptoAPI；Linux 尚无实现。
+4. 依赖外部 benchmark 的 retention lifecycle smoke 未注册进 CTest；当前由 PowerShell 测试显式运行，避免硬编码本机数据路径。
+5. global-view 仍使用固定 lambda，bundle reset 和 capacity transport 搜索尚未覆盖 V3 计划全部变体。
+6. `reference_nonsmooth_chain.json` 使用 64×64/0.9，`smoke.json` 使用 32×32/0.9；它们不是 canonical 512×512/1.0 正式实验。`global_view_smoke.json` 使用 canonical evaluator，但只有 1 轮，仍不是正式对照。
 
 ## 6. 推荐下一步
 
-除非用户另有任务，优先把 `global_view_gp` 提取成普通 registry stage，然后用 JSON pipeline 表达：
+除非用户另有任务，下一次算法实验直接用 JSON pipeline 表达：
 
 ```text
 external H375 checkpoint
@@ -92,7 +95,7 @@ external H375 checkpoint
 → exact_recovery / equal_shape_swap（可选）
 ```
 
-完成后进行相同 checkpoint/hash、threads、seed、预算的 50 轮对照。不要为了“架构完整”再增加服务层、插件框架或复杂 artifact manager。
+进行相同 checkpoint/hash、threads、seed、预算的 50 轮对照。新策略优先新增或修改一个 stage 及其参数，不要为了“架构完整”再增加服务层、插件框架或复杂 artifact manager。
 
 ## 7. 不能据此宣称
 

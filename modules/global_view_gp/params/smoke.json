@@ -1,0 +1,10 @@
+{
+  "iterations": 1,
+  "optimizer": "adam",
+  "step_policy": "control",
+  "learning_rate": 0.02,
+  "lambda": 0.2,
+  "active_ensemble": true,
+  "temporal_bundle": true,
+  "bundle_mix": 0.5
+}

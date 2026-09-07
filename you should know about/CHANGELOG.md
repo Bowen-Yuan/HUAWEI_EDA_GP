@@ -6,12 +6,12 @@
 
 - Git：基于 `00c0780` 开发，最终提交见 Git 历史，分支 `nonsmooth-gp-v1`。
 - Changed：新增最小 `microkernel`（registry、stage context、fresh audit、threads、SHA-256、三文件记录）；`main.cpp` 改为 registry 调度；`run` 与 `lab` 默认统一 metrics-only；普通策略源码归入对应 module 并由 CMake 直接编译；共享 exact/I/O/optimizer 归入 `framework/kernel`；移除 `framework/legacy`、重复源码镜像和未接线第二状态骨架。
-- Modules：新增显式 `global_capacity_transport`、`density_coordinate` stage；`global_view_gp` 的 lab 源移动到自己的 module。
-- Provenance：pipeline 记录解析后的 module chain、每阶段参数、evaluator 和输入 hash；lab 补全 optimizer/step/acceptance、best/last、runtime、接受/拒绝/reset 统计；threads 实际应用到 OpenMP。
-- Verification：模块权威构建通过；pipeline 和 lab smoke 通过；默认三文件、显式 save、外部 hash、workspace cleanup、placement round trip 均通过。
-- Numerical evidence：2-thread `adaptec1` lab 1 轮得到 HPWL `85999279.708727`、overflow `6.9999980678266%`，1 accepted；该结果仅为 smoke。
+- Modules：新增显式 `global_capacity_transport`、`density_coordinate` stage；`global_view_gp` 已成为普通 registry stage，且与薄 `lab` 入口共用模块内搜索实现。
+- Provenance：pipeline 记录开始时间、解析后的 module chain、每阶段参数、evaluator、输入 hash 和可选研究 metadata；lab 补全 optimizer/step/acceptance、best/last、runtime、接受/拒绝/reset 统计；CMake 写入 Git remote/branch/commit/dirty，threads 实际应用到 OpenMP。
+- Verification：模块权威构建通过；pipeline 和 lab smoke 通过；默认三文件、失败三文件摘要、显式 save、两种 input schema 的外部 hash、workspace cleanup、placement round trip 均通过。
+- Numerical evidence：早期 2-thread `adaptec1` lab 1 轮得到 HPWL `85999279.708727`、overflow `6.9999980678266%`，1 accepted；接入 registry 后用 active ensemble + bundle 同参数核对，registry 与 lab 末态均为 HPWL `85999318.311948`、overflow `6.99999030053%`、0 accepted。两者均仅为 smoke。
 - Contract impact：exact HPWL/density 公式不变；overflow 对外仍为百分比。
-- Remaining gaps：`global_view_gp` 尚需变为普通 registry stage；Git dirty state、跨平台 SHA-256 和失败摘要仍需完善。
+- Remaining gaps：跨平台 SHA-256、构建后 Git 状态刷新、依赖外部数据的 CTest 接线和完整 50 轮公平对照仍需完善。
 
 ## 2026-09-07 — 建立多模型交接知识库
 

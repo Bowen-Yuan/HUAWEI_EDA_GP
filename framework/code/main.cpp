@@ -2,6 +2,7 @@
 #include "microkernel.hpp"
 #include "epsilon_active/bookshelf.hpp"
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -18,6 +19,12 @@ using nsgp::Json;
 #endif
 #ifndef NSGP_GIT_BRANCH
 #define NSGP_GIT_BRANCH "unknown"
+#endif
+#ifndef NSGP_GIT_DIRTY
+#define NSGP_GIT_DIRTY "not_checked"
+#endif
+#ifndef NSGP_GIT_REMOTE
+#define NSGP_GIT_REMOTE "unknown"
 #endif
 namespace {
 constexpr const char* kDefaultDataset =
@@ -72,6 +79,20 @@ std::string timestamp() {
     return std::to_string(ticks);
 }
 
+std::string wall_clock_time() {
+    const auto now=std::chrono::system_clock::now();
+    const auto value=std::chrono::system_clock::to_time_t(now);
+    std::tm local{};
+#ifdef _WIN32
+    localtime_s(&local,&value);
+#else
+    localtime_r(&value,&local);
+#endif
+    std::ostringstream out;
+    out<<std::put_time(&local,"%Y-%m-%dT%H:%M:%S%z");
+    return out.str();
+}
+
 nsgp::DensityConfig density_config(const Json& pipeline) {
     nsgp::DensityConfig result;
     const Json* value=nullptr;
@@ -101,6 +122,7 @@ std::vector<PreparedStage> prepare_stages(const fs::path& pipeline_path,
             pipeline_path.parent_path()/stage.at("config").get<std::string>());
         stages.push_back({module,config,read_json(config)});
     }
+    if (stages.empty()) throw std::runtime_error("pipeline must contain at least one stage");
     return stages;
 }
 
@@ -111,6 +133,10 @@ void run_case(const Options& o,const std::string& case_name) {
     const auto density=density_config(pipeline);
     const auto stages=prepare_stages(pipeline_path,pipeline);
     auto registry=nsgp::make_default_registry();
+    if (!o.save_stage.empty() &&
+        std::none_of(stages.begin(),stages.end(),[&](const PreparedStage& stage) {
+            return stage.module==o.save_stage;
+        })) throw std::runtime_error("--save-stage is not present in pipeline: "+o.save_stage);
 
     ea::Database db=ea::read_bookshelf(o.dataset/case_name/case_name);
     if (!o.placement.empty()) ea::load_bookshelf_placement(db,o.placement);
@@ -122,11 +148,13 @@ void run_case(const Options& o,const std::string& case_name) {
         {"parameters",stage.config}});
     const std::string run_id=(o.run_id.empty()?case_name+"_"+timestamp():o.run_id)+
         (case_name==o.case_name?"":"_"+case_name);
-    Json params={{"run_id",run_id},{"case",case_name},
+    Json params={{"run_id",run_id},{"started_at",wall_clock_time()},
+        {"case",case_name},
         {"dataset_root",fs::absolute(o.dataset).string()},
         {"pipeline",pipeline_path.string()},{"threads",o.threads},
-        {"git",{{"branch",NSGP_GIT_BRANCH},{"commit",NSGP_GIT_COMMIT},
-                {"dirty","not_checked"}}},
+        {"git",{{"remote",NSGP_GIT_REMOTE},{"branch",NSGP_GIT_BRANCH},{"commit",NSGP_GIT_COMMIT},
+                {"dirty",NSGP_GIT_DIRTY}}},
+        {"experiment",pipeline.value("experiment",Json::object())},
         {"input",o.placement.empty()?Json{{"kind","raw_bookshelf"}}:
             Json{{"kind","placement"},{"path",fs::absolute(o.placement).string()},
                  {"sha256",nsgp::sha256_file(o.placement)}}},
@@ -140,31 +168,40 @@ void run_case(const Options& o,const std::string& case_name) {
     nsgp::ExperimentLog log(o.output_root,run_id,params);
     const auto started=std::chrono::steady_clock::now();
     const auto initial=nsgp::exact_audit(db,density);
+    auto last_audited=initial;
     bool retained=false;
-    for (std::size_t index=0; index<stages.size(); ++index) {
-        const auto& stage=stages[index];
-        const auto before=nsgp::exact_audit(db,density);
-        const auto stage_started=std::chrono::steady_clock::now();
-        nsgp::StageContext context{db,density,o.threads};
-        const auto stats=registry.get(stage.module)(context,stage.config);
-        nsgp::clamp_movable(db);
-        const auto after=nsgp::exact_audit(db,density);
-        const double seconds=std::chrono::duration<double>(
-            std::chrono::steady_clock::now()-stage_started).count();
-        log.record({static_cast<int>(index),stage.module,before,after,stats,seconds});
-        if (!o.save_stage.empty() && o.save_stage==stage.module) {
-            fs::create_directories(log.root()/"saved");
-            ea::write_bookshelf_placement(db,log.root()/"saved"/(stage.module+".pl"));
-            retained=true;
+    try {
+        for (std::size_t index=0; index<stages.size(); ++index) {
+            const auto& stage=stages[index];
+            const auto before=nsgp::exact_audit(db,density);
+            const auto stage_started=std::chrono::steady_clock::now();
+            nsgp::StageContext context{db,density,o.threads};
+            const auto stats=registry.get(stage.module)(context,stage.config);
+            nsgp::clamp_movable(db);
+            const auto after=nsgp::exact_audit(db,density);
+            last_audited=after;
+            const double seconds=std::chrono::duration<double>(
+                std::chrono::steady_clock::now()-stage_started).count();
+            log.record({static_cast<int>(index),stage.module,before,after,stats,seconds});
+            if (!o.save_stage.empty() && o.save_stage==stage.module) {
+                fs::create_directories(log.root()/"saved");
+                ea::write_bookshelf_placement(db,log.root()/"saved"/(stage.module+".pl"));
+                retained=true;
+            }
         }
+        const auto final=nsgp::exact_audit(db,density);
+        const double seconds=std::chrono::duration<double>(
+            std::chrono::steady_clock::now()-started).count();
+        log.finish(initial,final,seconds,retained);
+        std::cout<<std::setprecision(14)<<"completed "<<case_name<<" -> "<<log.root()
+                 <<" HPWL="<<final.hpwl<<" overflow_percent="
+                 <<final.overflow_ratio*100.0<<"%\n";
+    } catch (const std::exception& error) {
+        const double seconds=std::chrono::duration<double>(
+            std::chrono::steady_clock::now()-started).count();
+        log.fail(initial,last_audited,seconds,error.what());
+        throw;
     }
-    const auto final=nsgp::exact_audit(db,density);
-    const double seconds=std::chrono::duration<double>(
-        std::chrono::steady_clock::now()-started).count();
-    log.finish(initial,final,seconds,retained);
-    std::cout<<std::setprecision(14)<<"completed "<<case_name<<" -> "<<log.root()
-             <<" HPWL="<<final.hpwl<<" overflow_percent="
-             <<final.overflow_ratio*100.0<<"%\n";
 }
 }
 
@@ -174,8 +211,7 @@ int main(int argc,char** argv) {
         const auto options=parse_options(argc,argv);
         if (options.command=="list-modules") {
             for (const auto& name:nsgp::make_default_registry().names()) std::cout<<name<<'\n';
-            std::cout<<"historical_dct_poisson (historical-only)\n"
-                       "global_view_gp (lab)\n";
+            std::cout<<"historical_dct_poisson (historical-only)\n";
             return 0;
         }
         if (options.command=="audit") {

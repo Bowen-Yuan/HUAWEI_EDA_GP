@@ -73,6 +73,8 @@ public:
     void record(const StageRecord& record);
     void finish(const ExactMetrics& initial, const ExactMetrics& final,
                 double wall_seconds, bool placement_retained = false);
+    void fail(const ExactMetrics& initial, const ExactMetrics& last_audited,
+              double wall_seconds, const std::string& message);
     const std::filesystem::path& root() const noexcept { return root_; }
 private:
     std::filesystem::path root_;
@@ -89,6 +91,7 @@ void register_surplus_bisection(ModuleRegistry& registry);
 void register_equal_shape_swap(ModuleRegistry& registry);
 void register_global_capacity_transport(ModuleRegistry& registry);
 void register_density_coordinate(ModuleRegistry& registry);
+void register_global_view_gp(ModuleRegistry& registry);
 }
 
 ModuleRegistry make_default_registry();

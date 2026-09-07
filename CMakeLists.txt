@@ -55,9 +55,24 @@ execute_process(COMMAND git branch --show-current
   WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   OUTPUT_VARIABLE NSGP_GIT_BRANCH OUTPUT_STRIP_TRAILING_WHITESPACE
   ERROR_QUIET)
+execute_process(COMMAND git remote get-url origin
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  OUTPUT_VARIABLE NSGP_GIT_REMOTE OUTPUT_STRIP_TRAILING_WHITESPACE
+  ERROR_QUIET)
+execute_process(COMMAND git status --porcelain --untracked-files=no
+  WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+  OUTPUT_VARIABLE NSGP_GIT_STATUS OUTPUT_STRIP_TRAILING_WHITESPACE
+  ERROR_QUIET)
+if(NSGP_GIT_STATUS STREQUAL "")
+  set(NSGP_GIT_DIRTY "clean")
+else()
+  set(NSGP_GIT_DIRTY "dirty")
+endif()
 target_compile_definitions(nsgp PRIVATE
   NSGP_GIT_COMMIT="${NSGP_GIT_COMMIT}"
-  NSGP_GIT_BRANCH="${NSGP_GIT_BRANCH}")
+  NSGP_GIT_BRANCH="${NSGP_GIT_BRANCH}"
+  NSGP_GIT_DIRTY="${NSGP_GIT_DIRTY}"
+  NSGP_GIT_REMOTE="${NSGP_GIT_REMOTE}")
 
 # Historical replay tooling is intentionally separate from the default
 # challenge executable. It is only used to reproduce H219/H221 in the H375

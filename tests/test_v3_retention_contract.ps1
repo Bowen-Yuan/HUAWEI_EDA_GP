@@ -1,6 +1,8 @@
 param(
     [string]$ExperimentDirectory,
-    [string]$ExpectedSavedStage = ''
+    [string]$ExpectedSavedStage = '',
+    [switch]$AllowEmptyTrajectory,
+    [switch]$ExpectFailure
 )
 $ErrorActionPreference = 'Stop'
 if (-not $ExperimentDirectory) { throw 'pass -ExperimentDirectory <metrics-only experiment directory>' }
@@ -8,11 +10,13 @@ $names = @(Get-ChildItem -LiteralPath $ExperimentDirectory -File | ForEach-Objec
 $expected = @('experiment.md', 'params.json', 'trajectory.csv')
 if (Compare-Object $names $expected) { throw "retention contract violated: $($names -join ', ')" }
 $trajectory = @(Import-Csv (Join-Path $ExperimentDirectory 'trajectory.csv'))
-$hasPercentage = $trajectory.Count -gt 0 -and (
-    $null -ne $trajectory[0].overflow_percent -or
-    $null -ne $trajectory[0].overflow_percent_after
-)
-if (-not $hasPercentage) { throw 'trajectory lacks percentage overflow metrics' }
+$header = Get-Content (Join-Path $ExperimentDirectory 'trajectory.csv') -TotalCount 1
+if ($header -notmatch '(^|,)overflow_percent(_after)?(,|$)') {
+    throw 'trajectory lacks percentage overflow metrics'
+}
+if (-not $AllowEmptyTrajectory -and $trajectory.Count -eq 0) {
+    throw 'successful trajectory must contain at least one metric row'
+}
 
 $directories = @(Get-ChildItem -LiteralPath $ExperimentDirectory -Directory)
 if ($ExpectedSavedStage) {
@@ -30,10 +34,18 @@ if ($ExpectedSavedStage) {
 $params = Get-Content (Join-Path $ExperimentDirectory 'params.json') -Raw | ConvertFrom-Json
 $checkpointPath = $params.input_checkpoint
 $checkpointHash = $params.input_checkpoint_sha256
+if (-not $checkpointPath -and $params.input.kind -eq 'placement') {
+    $checkpointPath = $params.input.path
+    $checkpointHash = $params.input.sha256
+}
 if ($checkpointPath -and $checkpointHash) {
     $actual = (Get-FileHash -LiteralPath $checkpointPath -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($actual -ne $checkpointHash.ToLowerInvariant()) { throw 'external checkpoint hash changed' }
 }
 $workspace = Join-Path (Join-Path ([IO.Path]::GetTempPath()) 'nonsmooth-gp') $params.run_id
 if (Test-Path -LiteralPath $workspace) { throw "temporary workspace was not cleaned: $workspace" }
+if ($ExpectFailure) {
+    $summary = Get-Content (Join-Path $ExperimentDirectory 'experiment.md') -Raw
+    if ($summary -notmatch 'status: failed') { throw 'failure summary lacks failed status' }
+}
 Write-Output 'V3 retention contract passed'

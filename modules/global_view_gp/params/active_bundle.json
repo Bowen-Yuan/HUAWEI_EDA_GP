@@ -1,5 +1,11 @@
 {
   "command": "nsgp lab --case adaptec1 --iterations 50 --optimizer adam --active-ensemble --bundle --step-policy trust",
+  "iterations": 50,
+  "optimizer": "adam",
+  "step_policy": "trust",
+  "learning_rate": 0.02,
+  "lambda": 0.2,
+  "trust_radius_bins": 1.0,
   "active_ensemble": true,
   "epsilon_bin_scales": [0.0, 0.25, 0.5, 1.0],
   "temporal_bundle": true,

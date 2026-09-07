@@ -68,7 +68,7 @@ microkernel.cpp               # 注册一行
 - 默认只产生 `params.json`、`experiment.md`、`trajectory.csv`。
 - 只有 `--save-stage MODULE` 才写 `saved/MODULE.pl`。
 
-`global_view_gp` 的单阶段 lab CLI 位于它自己的模块目录，不再放在 framework。
+`global_view_gp` 同时提供普通 registry stage 和薄的单阶段 `lab` 便捷入口；两者复用同一个搜索实现，代码都位于模块目录，不在 framework 放置算法。
 
 ## 3. 模块目录是策略权威实现
 
@@ -82,7 +82,7 @@ microkernel.cpp               # 注册一行
 | `equal_shape_swap` | `swap_recovery.cpp`、`module.cpp` | equal-shape / net-aware swap |
 | `global_capacity_transport` | `coarse_flow.cpp`、`transport.cpp`、`module.cpp` | coarse 候选与 exact-audited transport |
 | `density_coordinate` | `density_coordinate.cpp`、`module.cpp` | exact density coordinate search |
-| `global_view_gp` | `global_view_lab.cpp/.hpp` | active ensemble、bundle、backtracking/trust 单阶段实验 |
+| `global_view_gp` | `global_view_lab.cpp/.hpp` | 普通 registry stage；active ensemble、bundle、backtracking/trust；兼容薄 `lab` 入口 |
 | `historical_exact_replay` | `legacy_stage_main.cpp` | 历史 exact CLI 兼容入口 |
 | `historical_dct_poisson` | 独立 Bookshelf/electric/spectral/homotopy 代码 | 只做历史 smooth 复现 |
 
@@ -91,12 +91,12 @@ microkernel.cpp               # 注册一行
 ## 4. CMake target
 
 - `nsgp_numeric_kernel`：四个 framework 数值原语 + 各模块算法源；名称表示共享链接单元，不表示固定算法流程。
-- `nsgp`：微内核 CLI、模块适配器和 global-view lab。
+- `nsgp`：微内核 CLI、模块适配器和复用同一 stage 实现的 global-view lab 入口。
 - `nsgp_tests`：exact 数值和 placement round-trip 契约。
 - `nsgp_legacy_stage`：历史 exact 兼容目标，源码在 module 目录。
 - `nsgp_historical_homotopy`：历史 DCT/Poisson 目标。
 
-CMake 配置时将 Git branch/commit 编译进 `nsgp` 的实验元数据；dirty 状态当前记录为 `not_checked`。
+CMake 配置时将 Git remote/branch/commit 和当时的 tracked-worktree dirty 状态编译进 `nsgp` 的实验元数据；手工编译无法提供的字段明确记录为 `unknown`/`not_checked`。
 
 ## 5. 配置与结果
 

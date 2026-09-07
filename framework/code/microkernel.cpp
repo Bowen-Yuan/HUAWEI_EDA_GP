@@ -158,6 +158,25 @@ void ExperimentLog::finish(const ExactMetrics& initial,
             : "Metrics-only: no placement or snapshot retained.\n");
 }
 
+void ExperimentLog::fail(const ExactMetrics& initial,
+                         const ExactMetrics& last_audited,
+                         double wall_seconds, const std::string& message) {
+    trajectory_.flush();
+    std::ofstream out(root_ / "experiment.md");
+    if (!out) throw std::runtime_error("cannot create failure experiment.md");
+    out << "# Failed pipeline experiment\n\n"
+        << "- status: failed\n"
+        << "- error: `" << message << "`\n"
+        << std::setprecision(14)
+        << "- initial HPWL: " << initial.hpwl << "\n"
+        << "- initial overflow: " << initial.overflow_ratio * 100.0 << "%\n"
+        << "- last audited HPWL: " << last_audited.hpwl << "\n"
+        << "- last audited overflow: " << last_audited.overflow_ratio * 100.0 << "%\n"
+        << "- completed stage count: " << records_.size() << "\n"
+        << "- wall seconds: " << wall_seconds << "\n\n"
+        << "Metrics-only failure record; no placement or snapshot retained.\n";
+}
+
 ModuleRegistry make_default_registry() {
     ModuleRegistry registry;
     modules::register_layout_init(registry);
@@ -168,6 +187,7 @@ ModuleRegistry make_default_registry() {
     modules::register_equal_shape_swap(registry);
     modules::register_global_capacity_transport(registry);
     modules::register_density_coordinate(registry);
+    modules::register_global_view_gp(registry);
     return registry;
 }
 

@@ -2,7 +2,7 @@
 
 ## 1. 实验目录原则
 
-新的正式研究实验优先使用 `nsgp lab`，默认目录：
+新的正式研究实验优先使用 JSON pipeline + `nsgp run`；`nsgp lab` 只用于 `global_view_gp` 单阶段便捷实验。两者默认目录均为：
 
 ```text
 framework/results/experiments/<run_id>/
@@ -64,7 +64,7 @@ debug/
 - NaN/Inf、异常退出、早停、bundle/optimizer reset 等关键事件；
 - 是否显式保留布局，以及原因。
 
-微内核 pipeline 会记录解析后的 module chain、参数、输入 hash（若有）、exact evaluator、threads 和 retention；global-view lab 还记录 optimizer、step 与 acceptance。Git dirty 状态目前仍为 `not_checked`。
+微内核 pipeline 会记录开始时间、解析后的 module chain、参数、输入 hash（若有）、exact evaluator、threads 和 retention；pipeline 顶层可用 `experiment` 对象记录 purpose、hypothesis、parent chain 等研究元数据。global-view lab 还记录 optimizer、step 与 acceptance。CMake 构建会记录 Git remote/branch/commit 和配置时 dirty 状态；手工编译明确写 `unknown`/`not_checked`。
 
 ## 4. 调用链格式
 
@@ -126,7 +126,7 @@ experiment:E17/saved/capacity_slack.pl
 4. external input safety：实验前后 checkpoint SHA-256 相同。
 5. handoff correctness：内存交接与临时 `.pl` round trip 的 exact metrics 一致。
 
-当前覆盖：PowerShell retention 测试验证 metrics-only、显式 stage save、外部 checkpoint 当前 hash 和临时 workspace 清理；C++ 数值测试验证 placement round trip 的坐标与 exact HPWL。异常 smoke 还验证错误退出后 workspace 不残留。后续仍应把这些 smoke 全部注册进自动 CTest。
+当前覆盖：PowerShell retention 测试验证 metrics-only、显式 stage save、pipeline/lab 两种外部 checkpoint schema 的当前 hash、临时 workspace 清理，以及首阶段前失败时的三文件失败摘要；C++ 数值测试验证 placement round trip 的坐标与 exact HPWL。依赖外部 benchmark 的 lifecycle smoke 尚未注册进自动 CTest，避免把本机数据路径硬编码进测试目标。
 
 ## 9. Git 中保存什么
 

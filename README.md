@@ -12,7 +12,9 @@ The project uses a compact static module registry.  Each optimization stage owns
 
 ## V3 retained global-view experiments
 
-`nsgp lab` is the V3 experiment entry point.  It reads the existing H375
+`global_view_gp` is a normal registry stage and can be placed anywhere in a JSON
+pipeline. `nsgp lab` remains a thin, convenient single-stage V3 entry point that
+uses the same search implementation. It reads the existing H375
 `adaptec1` 7% checkpoint as a read-only external input, records its SHA-256,
 and keeps layout hand-offs in memory.  A normal run deliberately produces only
 `params.json`, `experiment.md`, and `trajectory.csv` under
@@ -22,6 +24,11 @@ percentage.  For example:
 ```powershell
 nsgp lab --case adaptec1 --iterations 50 --optimizer adam --active-ensemble --bundle
 ```
+
+The equivalent composable form is `nsgp run --case adaptec1 --placement
+<checkpoint.pl> --pipeline framework/params/pipelines/global_view_smoke.json`;
+edit or add only the module parameter JSON and pipeline when composing a new
+numerical experiment.
 
 Use `--save-stage NAME` only when a placement artifact is explicitly needed.
 The lab supports `adam`, `amsgrad`, `adagrad`, `heavy-ball`, `sgd`,

@@ -1,0 +1,16 @@
+{
+  "name": "global_view_smoke",
+  "compliance_mode": "challenge_nonsmooth",
+  "experiment": {
+    "purpose": "registry/lab single-step structural equivalence smoke",
+    "hypothesis": "the registered stage reuses the lab search without metric drift",
+    "parent_chain": ["external:H375/global.pl"]
+  },
+  "density": { "bins_x": 512, "bins_y": 512, "target_density": 1.0 },
+  "stages": [
+    {
+      "module": "global_view_gp",
+      "config": "../../../modules/global_view_gp/params/smoke.json"
+    }
+  ]
+}
