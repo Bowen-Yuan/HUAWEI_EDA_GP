@@ -142,6 +142,27 @@ HPWL 改善 −1.6% 到 −9.7%；逐坐标自适应步长（amsgrad/adam）在�
 第 99 轮仍在下降。原始子梯度步长几乎不动布局（λ 无需超过 3.4）。曲线与数据在
 `framework/results/analysis/20260908_h221traj_optimizer_screen/`（本地，不入库）。
 
+### 3.3 V6 h221→86M 调参（exact_joint_gp 连续次梯度，300 轮）
+
+目标 86M/<7% **未命中**。最佳 run `C_B5_md025`：AMSGrad(lr .002, md .25, β .9/.99) +
+ratio λ(ob=.085, itv=2, ds=.5) → best-feasible **94,061,868.14 @ 6.7474%**，相对起点
+−14.36%，相对 V5 100 轮基线 −5.12%。关键发现：
+
+1. ratio λ 在 interval=5 时早期被无条件 1.25 增长项主导（B0/B2 逐位一致）；
+   interval=2 才真正激活（B5 95.83M，比 traj 系最好好 240 万）。
+2. maximum_delta（步长裁剪 = md×lr）单调有效：4→0.25 把首轮 overflow 冲击从
+   22.4% 压到 13.8%，HPWL 95.83M→94.06M；md=0.125 反转（94.19M）。
+3. trajectory λ 把 overflow 压到 4.7-4.8%（λ 峰值 81-412），容量裕量没有转化为
+   HPWL，距 86M 更远——与 V4 的结论一致：direction 质量而非 λ 强度是瓶颈。
+4. 动量微调全部劣于 (0.90, 0.99)；adagrad/dual-averaging 远差（后者 λ 发散）。
+5. A0 前 100 轮复现 V5 基线到打印精度（first<7% 同为 iter 54）。
+
+证据与逐轮标量：`framework/results/analysis/20260908_h221_86m_tuning/`
+（runs.csv、per_iteration_metrics.csv、三张收敛图，本地不入库）；台账回填在
+`plan/NONSMOOTH_GP_H221_86M_TUNING_PLAN_V6.md` §10。30 个实验目录全部通过
+retention 契约，checkpoint SHA-256 全程未变。E 阶段触发条件未满足（最后 50 轮
+仍下降 0.647% > 0.2%），未实现 schedule；证据支持的下一步是最佳配置延长到 500 轮。
+
 ## 4. 本次微内核回归证据
 
 - 模块权威构建 smoke：`layout_init → hpwl_adam → exact_joint_gp` 可运行。

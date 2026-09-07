@@ -84,5 +84,9 @@ V3 global-view 示例参数已经归入 `modules/global_view_gp/params`，不再
 
 - `NEW_PROJECT_IMPLEMENTATION_PLAN_V2.md`：项目数学契约、模块化目标和迁移设计。
 - `NONSMOOTH_GP_RETENTION_GLOBAL_OPTIMIZER_PLAN_V3.md`：metrics-only、global-view、optimizer/step 和 capacity 实验方案。
+- `NONSMOOTH_GP_ADAPTIVE_LAMBDA_OPTIMIZER_PLAN_V4.md`：adaptive-lambda funnel、optimizer 与 step-policy
+  的实现和实验蓝图；完成状态以当前源码、测试和 `05_CURRENT_STATE.md` 为准。
+- `NONSMOOTH_GP_H221_86M_TUNING_PLAN_V6.md`：从历史 h221 checkpoint 出发、面向 86M/<7% 目标的
+  `exact_joint_gp` 300 轮连续下降 λ/optimizer/步长调参方案与结果台账。
 
 计划是审查依据，不是完成证明；以当前 CMake、源码、测试和 exact 实验为事实。
