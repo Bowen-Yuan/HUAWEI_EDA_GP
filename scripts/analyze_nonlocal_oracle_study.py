@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 def rows(root):
     result = []
     for run in sorted(Path(root).iterdir()):
-        if "nonlocal_primary_" not in run.name:
+        if "nonlocal_primary_" not in run.name or run.name.endswith("_finite"):
             continue
         path = run / "trajectory.csv"
         if not path.exists():
