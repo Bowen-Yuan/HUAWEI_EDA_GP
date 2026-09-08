@@ -9,6 +9,8 @@ import matplotlib.pyplot as plt
 def rows(root):
     result = []
     for run in sorted(Path(root).iterdir()):
+        if "nonlocal_primary_" not in run.name:
+            continue
         path = run / "trajectory.csv"
         if not path.exists():
             continue
@@ -32,8 +34,7 @@ def main():
     output = Path(sys.argv[2]); output.mkdir(parents=True, exist_ok=True)
     for title, field, ylabel, log in [
         ("hpwl", "hpwl", "exact HPWL", False),
-        ("overflow", "overflow_percent", "exact overflow (%)", False),
-        ("lambda", "lambda", "lambda", True),
+        ("overflow", "overflow_percent_after", "exact overflow (%)", False),
     ]:
         plt.figure(figsize=(8, 4.5))
         for name, data in grouped.items():
@@ -47,7 +48,7 @@ def main():
         plt.savefig(output / f"{title}.png", dpi=160); plt.close()
     plt.figure(figsize=(6, 4.5))
     for name, data in grouped.items():
-        plt.plot([number(r, "overflow_percent") for r in data],
+        plt.plot([number(r, "overflow_percent_after") for r in data],
                  [number(r, "hpwl") for r in data], label=name)
     plt.xlabel("exact overflow (%)"); plt.ylabel("exact HPWL"); plt.legend(fontsize=7); plt.tight_layout()
     plt.savefig(output / "hpwl_overflow_phase.png", dpi=160)
