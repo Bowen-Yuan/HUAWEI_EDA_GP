@@ -34,6 +34,10 @@ debug/
 
 `nsgp run` 与 `nsgp lab` 都默认遵守 metrics-only。只有 `modules/historical_exact_replay` 和 `historical_dct_poisson` 的显式历史复现仍会产生较多 `.pl` 和日志；新算法实验不要沿用其重产物方式。
 
+Iterative pure-descent stages additionally write `record_type=iteration` rows to the same `trajectory.csv`.
+They contain post-update exact metrics and iteration indices; `record_type=stage` remains the module-boundary
+summary. This extends the three-file contract and does not create a debug artifact.
+
 ## 2. `run_id` 和实验名字
 
 推荐：`YYYYMMDD_HHMMSS_<case>_<question>_<variant>`，例如：

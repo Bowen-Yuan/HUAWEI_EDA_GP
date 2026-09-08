@@ -165,6 +165,20 @@ retention 契约，checkpoint SHA-256 全程未变。E 阶段触发条件未满�
 
 ## 4. 本次微内核回归证据
 
+### 4.1 Non-local oracle implementation health smoke（H375 canonical input）
+
+2026-09-08 已实现并注册五个独立 pure-descent oracle，使用 checkpoint SHA
+`ba0fd17e...07551e6b`、512×512/1.0、threads=1、AMSGrad/lr .002、一轮。每个 run 都是 metrics-only，
+无接受/拒绝/回滚，输入 hash 未被写入。末态仅用于健康检查：multiscale HPWL 89,408,103.56 / overflow
+22.7080%；cut 88,791,145.10 / 22.8037%；transport 88,777,884.40 / 23.5175%；charge 88,431,118.63 /
+28.4872%；finite-radius 88,924,114.36 / 23.6278%。这些大幅 excursion 说明无条件更新路径确实生效，
+但也说明默认量纲/步幅尚未校准；它们不是 20/100 轮比较结果。
+
+The common 100-round AMSGrad primary completed on the same input. Final (HPWL / overflow) was multiscale
+139,548,754.76 / 14.8103%; cut 156,286,419.76 / 69.0618%; transport 224,641,758.21 / 24.2072%; charge
+87,801,002.56 / 87.1644%; finite-radius (4 probes) 195,518,322.69 / 13.8906%. This is a negative result:
+no initial oracle returned to 7%, therefore none proceeds to optimizer/LR or fusion ranking without scale repair.
+
 - 模块权威构建 smoke：`layout_init → hpwl_adam → exact_joint_gp` 可运行。
 - 默认 `run` 结果目录只有 `params.json`、`experiment.md`、`trajectory.csv`，仓库根无 `global_metrics.csv`/`last.pl` 泄漏。
 - 显式 `--save-stage layout_init` 只增加 `saved/layout_init.pl`。
@@ -177,6 +191,10 @@ retention 契约，checkpoint SHA-256 全程未变。E 阶段触发条件未满�
 这些是结构和回归 smoke，不替代新的 50 轮公平算法对照。
 
 ## 5. 剩余缺口
+
+0. 新 non-local modules 尚缺 planned per-iteration trajectory telemetry、synthetic module contracts、
+20-round screen、100-round control/primary comparison和后续 optimizer/LR/fusion study；默认一轮仅是
+结构 health smoke，不能用于效果排名。
 
 1. `nsgp_numeric_kernel` 为减少链接复杂度仍同时编译共享 kernel 和模块算法源；物理所有权已正确。不要仅为目录形式改成多层 object libraries，除非测得编译收益。
 2. Git 元数据在 CMake configure 时记录，因此 build 后又修改源码时不会自动刷新；手工 g++ 构建显示 `unknown`/`not_checked`。

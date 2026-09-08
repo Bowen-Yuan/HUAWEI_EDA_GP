@@ -1,0 +1,1 @@
+{"name":"nonlocal_primary_cut","compliance_mode":"challenge_nonsmooth","density":{"bins_x":512,"bins_y":512,"target_density":1.0},"experiment":{"purpose":"100-round nonlocal primary"},"stages":[{"module":"density_cut_pressure_gp","config":"../../../modules/density_cut_pressure_gp/params/amsgrad_lr002.json"}]}

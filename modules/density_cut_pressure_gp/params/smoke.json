@@ -1,0 +1,1 @@
+{"iterations":1,"optimizer":{"name":"amsgrad","learning_rate":0.002},"lambda":{"policy":"trajectory"}}

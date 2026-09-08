@@ -1,0 +1,1 @@
+{"name":"nonlocal_primary_charge","compliance_mode":"challenge_nonsmooth","density":{"bins_x":512,"bins_y":512,"target_density":1.0},"experiment":{"purpose":"100-round nonlocal primary"},"stages":[{"module":"density_charge_gp","config":"../../../modules/density_charge_gp/params/amsgrad_lr002.json"}]}

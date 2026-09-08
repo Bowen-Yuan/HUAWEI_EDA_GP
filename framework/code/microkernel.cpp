@@ -106,7 +106,7 @@ ExperimentLog::ExperimentLog(const fs::path& output_root,
     std::ofstream(root_ / "params.json") << parameters.dump(2) << '\n';
     trajectory_.open(root_ / "trajectory.csv");
     if (!trajectory_) throw std::runtime_error("cannot create trajectory.csv");
-    trajectory_ << "stage_index,module,hpwl_before,hpwl_after,"
+    trajectory_ << "record_type,stage_index,module,global_iteration,stage_iteration,hpwl,hpwl_before,hpwl_after,"
                    "overflow_percent_before,overflow_percent_after,"
                    "density_energy,max_density,iterations,accepted,rejected,"
                    "objective_evaluations,wall_seconds\n";
@@ -114,7 +114,7 @@ ExperimentLog::ExperimentLog(const fs::path& output_root,
 
 void ExperimentLog::record(const StageRecord& r) {
     records_.push_back(r);
-    trajectory_ << r.stage_index << ',' << r.module << ',' << std::setprecision(14)
+    trajectory_ << "stage," << r.stage_index << ',' << r.module << ",,,," << std::setprecision(14)
                 << r.before.hpwl << ',' << r.after.hpwl << ','
                 << r.before.overflow_ratio * 100.0 << ','
                 << r.after.overflow_ratio * 100.0 << ','
@@ -122,6 +122,20 @@ void ExperimentLog::record(const StageRecord& r) {
                 << r.stats.iterations << ',' << r.stats.accepted << ','
                 << r.stats.rejected << ',' << r.stats.objective_evaluations << ','
                 << r.wall_seconds << '\n';
+    trajectory_.flush();
+}
+
+void ExperimentLog::record_iteration(int stage_index, const std::string& module,
+                                     const Json& t) {
+    trajectory_ << "iteration," << stage_index << ',' << module << ','
+                << t.value("global_iteration", t.value("stage_iteration", 0)) << ','
+                << t.value("stage_iteration", 0) << ',' << std::setprecision(14)
+                << t.value("hpwl", 0.0) << ",,,,"
+                << t.value("overflow_percent", 0.0) << ','
+                << t.value("overflow_percent", 0.0) << ','
+                << t.value("density_energy", 0.0) << ','
+                << t.value("max_density", 0.0) << ','
+                << "0,0,0," << t.value("objective_evaluations", 0) << ",0\n";
     trajectory_.flush();
 }
 
@@ -189,6 +203,11 @@ ModuleRegistry make_default_registry() {
     modules::register_density_coordinate(registry);
     modules::register_global_view_gp(registry);
     modules::register_adaptive_lambda_gp(registry);
+    modules::register_density_multiscale_active_gp(registry);
+    modules::register_density_cut_pressure_gp(registry);
+    modules::register_density_transport_gp(registry);
+    modules::register_density_charge_gp(registry);
+    modules::register_finite_radius_oracle_gp(registry);
     return registry;
 }
 

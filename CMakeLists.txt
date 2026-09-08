@@ -10,7 +10,8 @@ set(NUMERIC_KERNEL_SOURCES
   framework/kernel/src/density.cpp
   framework/kernel/src/hpwl.cpp
   framework/kernel/src/optimizer.cpp
-  framework/kernel/src/step_policy.cpp)
+  framework/kernel/src/step_policy.cpp
+  framework/kernel/src/nonlocal_descent.cpp)
 set(MODULE_ALGORITHM_SOURCES
   modules/exact_joint_gp/code/batch_acceptance.cpp
   modules/exact_joint_gp/code/lambda_controller.cpp
@@ -47,7 +48,14 @@ target_include_directories(nsgp PRIVATE modules/global_view_gp/code)
 target_sources(nsgp PRIVATE
   modules/adaptive_lambda_gp/code/adaptive_lambda_gp.cpp
   modules/adaptive_lambda_gp/code/module.cpp)
+target_sources(nsgp PRIVATE
+  modules/density_multiscale_active_gp/code/module.cpp
+  modules/density_cut_pressure_gp/code/module.cpp
+  modules/density_transport_gp/code/module.cpp
+  modules/density_charge_gp/code/module.cpp
+  modules/finite_radius_oracle_gp/code/module.cpp)
 target_include_directories(nsgp PRIVATE modules/adaptive_lambda_gp/code)
+target_include_directories(nsgp PRIVATE modules)
 target_link_libraries(nsgp PRIVATE nsgp_numeric_kernel)
 if(WIN32)
   target_link_libraries(nsgp PRIVATE Advapi32)

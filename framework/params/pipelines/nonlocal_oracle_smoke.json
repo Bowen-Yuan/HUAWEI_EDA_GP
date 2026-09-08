@@ -1,0 +1,6 @@
+{
+  "name":"nonlocal_oracle_smoke","compliance_mode":"challenge_nonsmooth",
+  "density":{"bins_x":512,"bins_y":512,"target_density":1.0},
+  "experiment":{"purpose":"one-step unconditional health screen for one selected non-local oracle"},
+  "stages":[{"module":"density_cut_pressure_gp","config":"../../../modules/density_cut_pressure_gp/params/smoke.json"}]
+}

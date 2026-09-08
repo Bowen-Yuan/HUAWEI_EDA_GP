@@ -24,6 +24,11 @@
 - 将 `historical_dct_poisson` 混入 `challenge_nonsmooth` pipeline；
 - 因性能原因跳过模块边界或最终的 fresh exact audit。
 
+Pure-descent research stages may use the exact audit only for telemetry and
+dynamic-lambda feedback.  They must state this explicitly and must not turn an
+overflow/HPWL measurement into a candidate acceptance, rollback, or final
+best-feasible restore rule.
+
 历史 H219/H221 DCT/Poisson 仅用于复现已有调用链，必须在名称、日志和报告中明确标为 historical smooth surrogate。
 
 ## 3. 权威评价定义

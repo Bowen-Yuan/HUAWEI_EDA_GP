@@ -127,6 +127,23 @@ raw Bookshelf .pl
 
 ## 其他显式模块
 
+## Non-local pure-descent oracle modules（2026-09-08）
+
+以下五个 module 共享无 acceptance 的更新骨架：每一步均由 optimizer 应用，只有 die clamp；exact audit
+仅供下一轮 lambda feedback 和记录，stage 输出永远是最后一个 applied state。它们不共享 oracle state：
+
+- `density_multiscale_active_gp`：多个 epsilon-active exact density direction 的当前轮 ensemble。
+- `density_cut_pressure_gp`：prefix cut surplus 提供的全局 x/y capacity pressure。
+- `density_transport_gp`：coarse surplus bin 指向最近 deficit bin 的 transport vector field。
+- `density_charge_gp`：frozen capacity imbalance 上的 Manhattan compact-support charge field。
+- `finite_radius_oracle_gp`：固定数量 movable cell 的 one-sided exact secant probing；probe 在短生命周期
+  layout copy 上进行，不会改变 live layout。
+
+它们的公共 engine 是 `framework/kernel/src/nonlocal_descent.cpp`；具体代码和 smoke 参数各自在
+`modules/<module>/code/module.cpp` 与 `params/smoke.json`。当前 smoke 入口在
+`framework/params/pipelines/nonlocal_*_smoke.json`。20/100 轮对照和逐轮 telemetry 尚未完成，不能把
+一轮 smoke 解释为算法比较结果。
+
 - `global_capacity_transport`：`coarse_flow.cpp`、`transport.cpp` 与 `module.cpp`，提供 excess-to-capacity relocation、原子组、auction/Hilbert、identity exchange。
 - `density_coordinate`：`density_coordinate.cpp` 与 `module.cpp`，提供 exact overlap coordinate descent。
 - `compact_recovery.cpp`：support contraction。

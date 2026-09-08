@@ -2,6 +2,22 @@
 
 这里记录影响后续接手者判断的架构、算法、实验协议和关键数值结果。它不是 Git commit 日志的复制品。
 
+## 2026-09-08 — Five independent non-local non-smooth pure-descent oracle stages (initial implementation)
+
+- Git: pending on `nonsmooth-gp-v1`.
+- Changed: added shared direction-normalization/trajectory-lambda/unconditional-update mechanics and registered
+  multiscale-active, cut-pressure, transport, charge, and finite-radius exact-secant stages.  Each strategy owns
+  its direction construction and its own smoke JSON; no acceptance gate, backtracking, rollback, best-feasible
+  restore, or cross-module state was added.
+- Numerical evidence: five canonical H375 one-step metrics-only health runs completed. The 100-round AMSGrad
+  primary ended at 14.81%/69.06%/24.21%/87.16%/13.89% overflow for multiscale/cut/transport/charge/finite(4 probes),
+  respectively: an explicit negative result, not a ranking.
+- Contract impact: exact evaluator and final metrics are unchanged; pure-descent stages now explicitly use audit only
+  for measurement/lambda feedback and hand off their last applied layout.
+- Documentation updated: 01, 02, 03, 05, 07 and this file.
+- Remaining gaps: per-iteration exact telemetry is now in trajectory.csv; synthetic strategy contracts, exact-only
+  pure-descent control, calibrated optimizer/LR screens, and pipeline fusion remain.
+
 ## 2026-09-07 — h221 → 86M 连续下降调参方案 V6
 
 - Git：`pending` on `nonsmooth-gp-v1`，方案基线 `0fbf1b9`。

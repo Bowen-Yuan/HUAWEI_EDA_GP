@@ -27,7 +27,7 @@ Set-Content -Path $metadataHeader -Value $metadataLines -Encoding ascii
 
 $flags = @('-std=c++17','-O3','-Wall','-Wextra','-Wpedantic','-fopenmp',
   '-Iframework/kernel/include','-Iframework/code','-Ithird_party',
-  '-Imodules/global_view_gp/code','-Imodules/adaptive_lambda_gp/code',
+  '-Imodules','-Imodules/global_view_gp/code','-Imodules/adaptive_lambda_gp/code',
   '-include', $metadataHeader)
 
 function Convert-ToObjectPath([string]$Source) {
@@ -41,6 +41,7 @@ $kernelSources = @(
   'framework/kernel/src/hpwl.cpp',
   'framework/kernel/src/optimizer.cpp',
   'framework/kernel/src/step_policy.cpp',
+  'framework/kernel/src/nonlocal_descent.cpp',
   'modules/exact_joint_gp/code/batch_acceptance.cpp',
   'modules/exact_joint_gp/code/lambda_controller.cpp',
   'modules/exact_joint_gp/code/placer.cpp',
@@ -65,7 +66,12 @@ $nsgpSources = @(
   'modules/global_capacity_transport/code/module.cpp',
   'modules/density_coordinate/code/module.cpp',
   'modules/adaptive_lambda_gp/code/adaptive_lambda_gp.cpp',
-  'modules/adaptive_lambda_gp/code/module.cpp')
+  'modules/adaptive_lambda_gp/code/module.cpp',
+  'modules/density_multiscale_active_gp/code/module.cpp',
+  'modules/density_cut_pressure_gp/code/module.cpp',
+  'modules/density_transport_gp/code/module.cpp',
+  'modules/density_charge_gp/code/module.cpp',
+  'modules/finite_radius_oracle_gp/code/module.cpp')
 
 New-Item -ItemType Directory -Force -Path 'build/obj' | Out-Null
 

@@ -50,6 +50,8 @@ microkernel.cpp               # 注册一行
 - `src/step_policy.cpp`：轻量 step controller（constant / cosine / trust），只决定 learning rate 和
   per-step maximum delta；acceptance 和 backtracking 仍在调用方，保证所有 optimizer 对比共享同一个
   exact 接受契约。
+- `src/nonlocal_descent.cpp`：五个 non-local oracle 共用的 pure-descent mechanics（RMS direction
+  normalization、trajectory lambda、finite guard 和 die clamp）；不包含具体 oracle 或 acceptance。
 
 ### `framework/code/microkernel.hpp/.cpp`
 

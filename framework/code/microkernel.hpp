@@ -32,6 +32,7 @@ struct StageContext {
     ea::Database& db;
     DensityConfig density;
     int threads = 1;
+    std::function<void(int, const std::string&, const Json&)> log_iteration;
 };
 
 struct StageStats {
@@ -71,6 +72,8 @@ public:
     ExperimentLog(const std::filesystem::path& output_root,
                   const std::string& run_id, const Json& parameters);
     void record(const StageRecord& record);
+    void record_iteration(int stage_index, const std::string& module,
+                          const Json& telemetry);
     void finish(const ExactMetrics& initial, const ExactMetrics& final,
                 double wall_seconds, bool placement_retained = false);
     void fail(const ExactMetrics& initial, const ExactMetrics& last_audited,
@@ -93,6 +96,11 @@ void register_global_capacity_transport(ModuleRegistry& registry);
 void register_density_coordinate(ModuleRegistry& registry);
 void register_global_view_gp(ModuleRegistry& registry);
 void register_adaptive_lambda_gp(ModuleRegistry& registry);
+void register_density_multiscale_active_gp(ModuleRegistry& registry);
+void register_density_cut_pressure_gp(ModuleRegistry& registry);
+void register_density_transport_gp(ModuleRegistry& registry);
+void register_density_charge_gp(ModuleRegistry& registry);
+void register_finite_radius_oracle_gp(ModuleRegistry& registry);
 }
 
 ModuleRegistry make_default_registry();

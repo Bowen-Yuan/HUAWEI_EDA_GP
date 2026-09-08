@@ -26,6 +26,8 @@
 - `src/optimizer.cpp`：Adam、AMSGrad、AdaGrad、HeavyBall、SGD、NormalizedSGD、DualAveraging。
 - `src/step_policy.hpp/.cpp`：StepController（constant/cosine/trust）、StepDecision、StepObservation、
   parse_step_policy / make_step_controller。
+- `include/epsilon_active/nonlocal_descent.hpp`、`src/nonlocal_descent.cpp`：non-local pure-descent
+  shared mechanics；具体 oracle 保持在各 module。
 
 `framework/legacy` 已移除，不再是构建权威。
 
@@ -48,6 +50,9 @@
   `params/smoke.json`、`adam_trust.json`（A1 基线）、`adam_trust_verbose.json`（逐轮遥测诊断）、
   `ablation_no_explore.json`（A2）、`ablation_fixed_lambda.json`（A3）、`optimizer_screen.json`
   （B 筛选模板）、`params/README.md`（字段单位说明）。
+- `density_multiscale_active_gp`、`density_cut_pressure_gp`、`density_transport_gp`、`density_charge_gp`、
+  `finite_radius_oracle_gp`：五个独立 non-local non-smooth pure-descent module；每个目前含 code/module.cpp
+  与 params/smoke.json。
 - `historical_exact_replay`：历史 exact CLI 源，保留 target 名 `nsgp_legacy_stage` 以兼容脚本。
 - `historical_dct_poisson`：独立 Bookshelf/electric/spectral/homotopy 历史 smooth 模块。
 

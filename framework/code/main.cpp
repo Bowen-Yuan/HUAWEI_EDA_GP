@@ -175,7 +175,13 @@ void run_case(const Options& o,const std::string& case_name) {
             const auto& stage=stages[index];
             const auto before=nsgp::exact_audit(db,density);
             const auto stage_started=std::chrono::steady_clock::now();
-            nsgp::StageContext context{db,density,o.threads};
+            nsgp::StageContext context{db,density,o.threads,
+                [&](int stage_iteration, const std::string& module, const Json& telemetry) {
+                    Json tagged=telemetry;
+                    tagged["stage_iteration"]=stage_iteration;
+                    tagged["global_iteration"]=stage_iteration;
+                    log.record_iteration(static_cast<int>(index),module,tagged);
+                }};
             const auto stats=registry.get(stage.module)(context,stage.config);
             nsgp::clamp_movable(db);
             const auto after=nsgp::exact_audit(db,density);
