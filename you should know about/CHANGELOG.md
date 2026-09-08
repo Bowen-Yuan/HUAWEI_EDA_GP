@@ -2,6 +2,23 @@
 
 这里记录影响后续接手者判断的架构、算法、实验协议和关键数值结果。它不是 Git commit 日志的复制品。
 
+## 2026-09-08 — V7 H252-H257 四模块联合链：从 h221 命中 88M/7%
+
+- Git：基于 e230425（nonsmooth-gp-v1），最终提交见 Git 历史。
+- Changed：`exact_recovery` module adapter 新增可选 JSON 键 degree_limit/axis_separated/
+  breakpoint_oracle/net_block_density_direction/net_block_degree_limit/net_block_max_nodes/
+  net_block_max_blocks；`exact_joint_gp` adapter 新增可选 net_batch.weight/degree_limit。
+  默认值全部等于原 RecoveryConfig/NetBatchConfig 默认，既有 pipeline 行为不变。
+- Numerical evidence：五阶段链（cap15 recovery → bridge dws .5/cap .15 → retighten dws 4.75/
+  cap .07 → cap07 polish ×2）从 h221 best.pl 出发，11 个 300 步 run 筛 optimizer/步长。
+  adam lr .002/.001 final 87,599,730.55 @ 6.9999995%（命中 88M/7%，−20.3% vs 起点）；
+  amsgrad 89.83M；sgd/heavy-ball/nsgd retighten 失败（~10%）；步长 .002 为 adam 峰值。
+  与 V6 单阶段（94.06M）相比，分段压力调度收益 +7.3%。
+- Contract impact：exact HPWL/overflow 语义不变；新增键只暴露既有 config 字段；实验
+  metrics-only，输入 checkpoint hash 前后不变。
+- Documentation updated：05 §3.4 与本文件。
+- Remaining gaps：单 case/单 checkpoint/threads=16；未做 8 case 外推与 seed 稳定性。
+
 ## 2026-09-08 — Five independent non-local non-smooth pure-descent oracle stages (initial implementation)
 
 - Git: pending on `nonsmooth-gp-v1`.

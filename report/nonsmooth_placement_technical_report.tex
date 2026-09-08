@@ -1,0 +1,873 @@
+\documentclass[UTF8,a4paper,11pt]{ctexart}
+
+\usepackage[left=2.2cm,right=2.2cm,top=2.1cm,bottom=2.2cm]{geometry}
+\usepackage{amsmath,amssymb,mathtools,bm}
+\usepackage{booktabs,tabularx,array,multirow}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage{microtype}
+\usepackage{float}
+
+\definecolor{TitleBlue}{RGB}{22,67,105}
+\definecolor{RuleBlue}{RGB}{55,105,145}
+\definecolor{SoftBlue}{RGB}{238,246,251}
+\definecolor{SoftGray}{RGB}{246,247,249}
+\definecolor{WarnRed}{RGB}{154,45,45}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=TitleBlue,
+  citecolor=TitleBlue,
+  urlcolor=TitleBlue,
+  pdfauthor={HUAWEI EDA GP project},
+  pdftitle={精确非光滑全局布局中的优化器比较与非局部搜索方向研究}
+}
+
+\captionsetup{font=small,labelfont=bf,labelsep=quad}
+\setlist{nosep,leftmargin=2em}
+\setlength{\parindent}{2em}
+\setlength{\parskip}{0.25em}
+\renewcommand{\arraystretch}{1.18}
+\setcounter{secnumdepth}{3}
+\setcounter{tocdepth}{2}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small 精确非光滑全局布局技术报告}
+\fancyhead[R]{\small 2026-09-08}
+\fancyfoot[C]{\small\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\DeclareRobustCommand{\code}[1]{\texttt{\detokenize{#1}}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\norm}[1]{\left\lVert #1\right\rVert}
+\newcommand{\pos}[1]{\left[#1\right]_{+}}
+\newcommand{\rms}{\operatorname{RMS}}
+\newcommand{\rmsnorm}{\operatorname{RMSNorm}}
+\newcommand{\clip}{\operatorname{clip}}
+\newcommand{\fresh}{\textit{fresh exact audit}}
+
+\begin{document}
+
+\begin{center}
+  {\LARGE\bfseries\color{TitleBlue} 精确非光滑全局布局中的优化器比较与非局部搜索方向研究\par}
+  \vspace{0.45em}
+  {\large 基于 \code{adaptec1} 历史中间布局的机制验证与方案设计\par}
+  \vspace{0.7em}
+  {\normalsize 技术汇报稿（阶段性版本）\quad 2026年9月8日}
+\end{center}
+
+\vspace{0.5em}
+\noindent\colorbox{SoftBlue}{%
+  \parbox{\dimexpr\textwidth-2\fboxsep\relax}{%
+  \textbf{报告范围。}本文首先汇报从历史中间结果
+  \code{h221_dct_poisson_512/best.pl} 出发，对不同优化器、学习率、坐标步幅裁剪和
+  $\lambda$ 调节方式所做的数值比较；随后给出五类 non-local、non-smooth 搜索方向的理论动机、
+  数学构造与当前实现边界，并加入五模块在另一份 H221 checkpoint 上的最新 300 步 exact 轨迹。
+  该批次用于机制筛选；由于尚缺同骨架 exact-only control，本文只陈述可复核的正负信号，不作超出
+  当前 case、checkpoint 和参数的普适性结论。}}
+
+\begin{abstract}
+全局布局同时要求降低线长与控制密度溢出，而 exact HPWL 和基于矩形--bin 精确相交的密度量均为
+分段光滑甚至局部平坦的函数。本文研究一种保持 exact 评价不变的连续非光滑优化路线：以
+epsilon-active HPWL 方向和 exact overlap density 方向构成联合搜索方向，通过动态 $\lambda$ 平衡
+线长收缩与密度恢复，并比较 SGD、Heavy Ball、Normalized SGD、AdaGrad、Adam、AMSGrad 与
+Dual Averaging 的数值行为。100 步对照表明 AMSGrad 在无逐步接受/回溯的轨迹反馈机制下取得
+$99.14\,\mathrm{M}$ HPWL、$5.42\%$ overflow；300 步调参进一步取得
+$94.06\,\mathrm{M}$、$6.75\%$，但尚未达到 $86\,\mathrm{M}$ 且 overflow $<7\%$ 的目标。
+进一步采用分阶段容量压力调度后，Adam 在 300 步 GP 预算下达到
+$87.60\,\mathrm{M}$、$7.00\%$，说明优化器与步幅固然重要，但搜索方向和阶段化任务分解具有更大影响。
+基于这一判断，本文提出多尺度 active-set、累计切割压力、盈余--空闲运输、非光滑容量电荷场和
+有限半径 exact secant 五类非局部方向，目标是在不引入平滑目标、硬可行域门控或逐步接受机制的条件下，
+补足局部次梯度缺失的“远处容量在哪里”与“跨越平台需要移动多远”两类信息。最新 300 步对照显示，
+transport 与单探针 finite-radius 分别观察到
+$92.21\,\mathrm{M}@6.82\%$ 和 $92.38\,\mathrm{M}@6.60\%$ 的中途可行状态，但终态均重新越过
+$7\%$；charge 以 $6.82\%$ 结束，却将 HPWL 恶化至 $120.30\,\mathrm{M}$；cut pressure 未返回
+可行带。五种配置均未达到 $86\,\mathrm{M}/<7\%$，说明非局部信息已经产生可用瞬态方向，但长时稳定性、
+wire--density 协调和 $\lambda$ 反馈仍是主要瓶颈。
+\end{abstract}
+
+\tableofcontents
+
+\section{问题背景与评价契约}
+
+\subsection{研究对象与目标}
+
+设可动单元中心坐标为
+\[
+  x=(x_1,y_1,\ldots,x_n,y_n)\in\R^{2n}.
+\]
+本项目研究 ISPD 2005 Bookshelf 数据上的全局布局，不包含 row/site snapping、overlap removal、
+legalization 或 detailed placement。因此，“overflow 低于 $7\%$”只表示满足当前全局布局密度指标，
+不能表述为布局已经合法化。
+
+本阶段的量化目标为
+\[
+  W(x)\le 86\times 10^6,
+  \qquad O(x)<7\%.
+\]
+所有实验均从同一个历史中间结果出发，并在 canonical $512\times512$ bins、target density $1.0$
+下评价。输入文件经可动单元 die clamp 后的起点为
+\[
+  W(x_0)=109{,}837{,}622.009,
+  \qquad O(x_0)=7.8193\%.
+\]
+该 checkpoint 的 SHA-256 为
+\par\noindent\hspace*{2em}{\small\path{9d0bd99966c3d679780ea73f0c28d9b3eb4163661fe679dfd85d7d32277e79b2}}。
+
+\subsection{Exact HPWL}
+
+对网络 $e$ 中的 pin $p$，pin 坐标包含相对单元中心的偏移：
+\[
+  X_p=x_{v(p)}+\Delta x_p,
+  \qquad
+  Y_p=y_{v(p)}+\Delta y_p.
+\]
+加权 exact HPWL 定义为
+\begin{equation}
+  W(x)=\sum_{e\in\mathcal E}w_e
+  \left[
+  \max_{p\in e}X_p-\min_{p\in e}X_p
+  +\max_{p\in e}Y_p-\min_{p\in e}Y_p
+  \right].
+  \label{eq:hpwl}
+\end{equation}
+式\eqref{eq:hpwl}中的 $\max/\min$ 使目标在 active pin 切换处不可微；多个 pin 并列极值时，
+次梯度还具有集合值特征。
+
+\subsection{Exact overlap density 与 overflow}
+
+令 $A_b$ 为 bin $b$ 的面积，$\operatorname{occ}_b(x)$ 为所有可动矩形与该 bin 的精确相交面积，
+再加上占据物理容量的固定宏相交面积。定义
+\begin{align}
+  \rho_b(x)&=\frac{\operatorname{occ}_b(x)}{A_b},\\
+  D(x)&=\sum_b\frac{1}{2}A_b\pos{\rho_b(x)-\rho_t}^{2},
+  \label{eq:density-energy}\\
+  O(x)&=\frac{\sum_b A_b\pos{\rho_b(x)-\rho_t}}
+  {A_{\mathrm{movable}}},
+  \qquad \pos{z}=\max(z,0).
+  \label{eq:overflow}
+\end{align}
+其中 fixed macro 占用容量但不移动，\code{terminal_NI} 不占物理容量。需要特别强调：
+$D(x)$ 是用于构造密度方向的平方超额能量，$O(x)$ 是最终报告的线性超额比例；二者相关但不等价。
+因此，$D$ 下降不保证 $O$ 在每一步同步下降。
+
+\subsection{搜索方向与评价指标的分离}
+
+本研究允许使用 epsilon-active、容量粗网格、有限位移探测等信息生成方向，但最终数值均由
+式\eqref{eq:hpwl}--\eqref{eq:overflow}重新计算。也就是说，方向 oracle 可以扩展，评价契约不能改变。
+历史 DCT/Poisson 阶段仅用于提供起点与对照认识，不进入正式 exact non-smooth 评价链。
+
+\section{联合连续下降框架与 \code{exact_joint_gp}}
+
+\subsection{模块对应的计算环节}
+
+\code{exact_joint_gp} 并不是单一“优化器名称”，而是一段由多个环节组成的联合全局布局阶段：
+\begin{enumerate}
+  \item \textbf{线长方向：}由 exact HPWL 的 epsilon-active 极值 pin 集合产生
+  $g_W\in\partial_{\varepsilon_W}W(x)$；
+  \item \textbf{密度方向：}由 exact rectangle/bin overlap 能量产生
+  $g_D\in\partial_{\varepsilon_D}D(x)$；
+  \item \textbf{动态权衡：}由 $\lambda_k$ 控制线长方向与密度方向的相对强度；
+  \item \textbf{节点预条件：}依据 pin 数和单元面积抑制尺度差异；
+  \item \textbf{优化器更新：}将联合方向交给 SGD/Adam/AMSGrad 等优化器；
+  \item \textbf{边界处理与审计：}移动后仅做 die boundary clamp，并用 exact evaluator 记录轨迹。
+\end{enumerate}
+
+当前实现中，第 $i$ 个可动单元的联合方向可概括为
+\begin{equation}
+  g_{k,i}=
+  \frac{g_{W,k,i}+\lambda_k\bigl(g_{D,k,i}+w_Bg_{B,k,i}\bigr)}
+  {\max\{1,\,d_i+\lambda_k A_i\}},
+  \label{eq:joint-direction}
+\end{equation}
+其中 $d_i$ 是节点 pin 数，$A_i$ 是单元面积，$g_B$ 表示可选 net-batch 密度共享方向。
+V5/V6 单阶段调参关闭逐步 batch acceptance，因此轨迹更新为
+\begin{equation}
+  x_{k+1}=\Pi_{\mathrm{die}}
+  \left(x_k-\Delta_k\right),
+  \qquad
+  \Delta_k=\mathcal O_k(g_k;\eta,m),
+  \label{eq:unconditional-update}
+\end{equation}
+其中 $\mathcal O_k$ 是具体优化器，$\eta$ 为学习率，$m\eta$ 为单坐标最大更新量。
+$\Pi_{\mathrm{die}}$ 只处理物理边界，不是 overflow 可行性投影。
+
+\paragraph{“bridge”的含义。}
+\code{exact_joint_gp bridge} 指采用较弱密度压力、允许 overflow 暂时上升的联合 GP 阶段。
+它连接“在较宽容量带内快速压缩 HPWL”的探索阶段与“提高密度压力、返回 $7\%$”的 retighten 阶段。
+bridge 能显著降低 HPWL，并非因为更换了最终评价函数，而是因为它暂时减少了密度方向对线长收缩的阻碍；
+随后必须由 retighten/recovery 重新支付密度代价。其本质是阶段化压力调度，而不是神秘的单步改进算子。
+
+\subsection{动态 \texorpdfstring{$\lambda$}{lambda}：软反馈而非硬约束}
+
+对纯下降实验，可给定从较高探索区向目标区收缩的参考轨迹。令
+\[
+  p_k=\frac{k}{T-1},\qquad s(p)=p^2(3-2p),
+\]
+则
+\begin{equation}
+  \bar O_k=O_{\mathrm{end}}+
+  (O_{\mathrm{start}}-O_{\mathrm{end}})[1-s(p_k)],
+  \qquad O_{\mathrm{start}}=15\%,\quad O_{\mathrm{end}}=7\%.
+  \label{eq:overflow-reference}
+\end{equation}
+基于误差
+\[
+  e_k=\frac{O_k-\bar O_k}{O_{\mathrm{scale}}}
+\]
+可在 log-domain 中更新
+\begin{equation}
+  \log\lambda_{k+1}=clip
+  \left(
+  \log\lambda_k+\eta_pe_k+\eta_d(e_k-e_{k-1})+\eta_iI_k
+  \right),
+  \qquad I_k=\beta_I I_{k-1}+e_k.
+  \label{eq:lambda-pid}
+\end{equation}
+当 overflow 高于参考值时，$\lambda$ 自然增大；低于参考值时，线长方向获得更多自由度。
+这里的 $15\%$ 是反馈参考区，不是 hard ceiling；$O_k>\bar O_k$ 不会触发拒绝、回溯或恢复旧布局。
+
+\section{第一部分工作：优化器与步幅机制的数值比较}
+
+\subsection{所比较的优化器}
+
+设 $g_k$ 为式\eqref{eq:joint-direction}的联合方向，以下给出主要更新规则。SGD 与 Heavy Ball 分别为
+\begin{align}
+  \Delta_k&=\eta g_k,\\
+  v_k&=\mu v_{k-1}+(1-\mu)g_k,
+  \qquad \Delta_k=\eta v_k.
+\end{align}
+AdaGrad 采用逐坐标累计平方梯度
+\begin{equation}
+  r_k=r_{k-1}+g_k\odot g_k,
+  \qquad
+  \Delta_k=\eta\frac{g_k}{\sqrt{r_k}+\epsilon}.
+\end{equation}
+Adam 采用一、二阶指数矩估计
+\begin{align}
+  m_k&=\beta_1m_{k-1}+(1-\beta_1)g_k,\\
+  v_k&=\beta_2v_{k-1}+(1-\beta_2)g_k\odot g_k,\\
+  \Delta_k&=\eta\frac{\widehat m_k}{\sqrt{\widehat v_k}+\epsilon}.
+\end{align}
+AMSGrad 进一步令 $\overline v_k=\max(\overline v_{k-1},\widehat v_k)$，避免有效学习率因二阶矩下降而再次增大。
+Dual Averaging 则依据累计方向 $G_k=\sum_{t=1}^{k}g_t$ 更新，当前实现使用
+$\Delta_k=\eta G_k/\sqrt{k}$。所有优化器最终都应用统一的坐标裁剪：
+\begin{equation}
+  \Delta_{k,j}\leftarrow\clip(\Delta_{k,j},-m\eta,m\eta).
+  \label{eq:step-clipping}
+\end{equation}
+
+\subsection{V5：100 步优化器筛选}
+
+V5 固定 \code{exact_joint_gp}、trajectory $\lambda$、$\eta=0.002$、$m=4$、100 步、threads=1，
+关闭逐步 acceptance 与 backtracking，仅改变优化器。表\ref{tab:v5}中的 best-feasible 是运行末端
+selector 在内存中选取的 $O\le7\%$ 状态；该 selector 用于最终报告/交接，不参与中间步的接受判断。
+
+\begin{table}[!htbp]
+\centering
+\caption{V5：相同连续下降协议下的优化器比较}
+\label{tab:v5}
+\small
+\begin{tabular}{lrrrr}
+\toprule
+优化器 & best-feasible HPWL & overflow & 首次 $\le7\%$ & $\lambda$ 峰值 \\
+\midrule
+AMSGrad & \textbf{99,136,915.82} & 5.4217\% & 54 & 51 \\
+Adam & 99,960,810.50 & 5.5886\% & 56 & 51 \\
+AdaGrad & 101,850,109.32 & 6.9879\% & 75 & 130 \\
+Dual Averaging & 105,949,370.15 & 6.9907\% & 96 & 131 \\
+SGD & 108,191,594.03 & 5.2690\% & 10 & 3.2 \\
+Heavy Ball & 108,228,173.46 & 5.2480\% & 11 & 3.3 \\
+Normalized SGD & 108,985,009.69 & 4.9752\% & 21 & 3.4 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+结果说明，在当前高度异质、活跃集合频繁切换的梯度上，逐坐标自适应缩放比原始统一步长更有效。
+AMSGrad 和 Adam 分别较起点降低约 $9.75\%$ 和 $9.01\%$ HPWL；SGD 类方法虽然很快回到
+$7\%$ 以下，却因实际移动较小而没有充分利用 HPWL 下降空间。AdaGrad 与 Dual Averaging 的
+$\lambda$ 峰值超过 130，说明后半程大量预算用于密度恢复，而不是继续压缩线长。
+
+\IfFileExists{../framework/results/analysis/20260908_h221traj_optimizer_screen/h221traj_convergence.png}{%
+\begin{figure}[!htbp]
+  \centering
+  \includegraphics[width=0.92\textwidth]{../framework/results/analysis/20260908_h221traj_optimizer_screen/h221traj_convergence.png}
+  \caption{V5 七种优化器的 HPWL、overflow 与 $\lambda$ 轨迹。曲线用于比较动态过程，最终数值以 exact audit 表格为准。}
+  \label{fig:v5-convergence}
+\end{figure}}{}
+
+\subsection{V6：300 步学习率、步幅裁剪与 \texorpdfstring{$\lambda$}{lambda} 调参}
+
+V6 将预算扩展到 300 步，目标直接设为 $86\,\mathrm{M}$ 且 overflow $<7\%$。
+主要研究变量为学习率 $\eta$、maximum delta multiplier $m$、$\lambda$ policy 及更新间隔。
+表\ref{tab:v6-step}汇总了能够解释主要结论的代表性配置。
+
+\begin{table}[!htbp]
+\centering
+\caption{V6：代表性学习率与坐标步幅裁剪结果（AMSGrad + ratio $\lambda$）}
+\label{tab:v6-step}
+\small
+\begin{tabular}{lrrrrr}
+\toprule
+配置 & $\eta$ & $m$ & best-feasible HPWL & overflow & 峰值 overflow \\
+\midrule
+lr-$5\times10^{-4}$ & 0.0005 & 4 & 97,837,619.00 & 6.9776\% & 13.7142\% \\
+lr-$10^{-3}$ & 0.0010 & 4 & 96,491,160.77 & 6.9431\% & 18.8673\% \\
+lr-$2\times10^{-3}$ & 0.0020 & 4 & 95,827,835.14 & 6.9621\% & 22.4159\% \\
+lr-$4\times10^{-3}$ & 0.0040 & 4 & 99,386,752.93 & 6.9810\% & 23.9030\% \\
+\midrule
+$m=2$ & 0.0020 & 2 & 95,237,671.77 & 6.9001\% & 22.4159\% \\
+$m=1$ & 0.0020 & 1 & 95,226,587.83 & 6.9014\% & 22.4160\% \\
+$m=0.5$ & 0.0020 & 0.5 & 94,746,041.05 & 6.9084\% & 19.4579\% \\
+$m=0.25$ & 0.0020 & 0.25 & \textbf{94,061,868.14} & \textbf{6.7474\%} & 13.7913\% \\
+$m=0.125$ & 0.0020 & 0.125 & 94,188,027.39 & 6.8695\% & 9.7796\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+最优配置为 AMSGrad、$\eta=0.002$、$m=0.25$、$(\beta_1,\beta_2)=(0.90,0.99)$，
+并使用 ratio $\lambda$、update interval $2$、density weight scale $0.5$。其 exact 结果为
+\[
+  W=94{,}061{,}868.14,
+  \qquad O=6.7474\%.
+\]
+相对起点 HPWL 下降 $14.36\%$，相对 V5 的 100 步 AMSGrad 结果进一步下降 $5.12\%$；
+但距离 $86\,\mathrm{M}$ 仍差 $8.06\,\mathrm{M}$，所以目标尚未命中。
+
+V6 反映出三个重要机制。第一，$\eta$ 不是越大越好，$0.004$ 产生更高早期 excursion 并恶化终值。
+第二，在 $\eta=0.002$ 下，将 $m$ 从 4 缩小到 0.25 显著降低早期 overflow 冲击，使更多迭代真正用于
+HPWL 下降；但继续缩至 0.125 后收益反转，说明过强裁剪会造成进展不足。第三，trajectory $\lambda$
+将 overflow 压到约 $4.7\%$--$4.8\%$，峰值 $\lambda$ 可达 81--412，却没有把额外容量裕量转化为
+更低 HPWL；ratio $\lambda$ 保持在目标带附近反而更优。这说明瓶颈不只是密度压力大小，更是方向质量。
+
+\IfFileExists{../framework/results/analysis/20260908_h221_86m_tuning/convergence_main.png}{%
+\begin{figure}[!htbp]
+  \centering
+  \includegraphics[width=0.96\textwidth]{../framework/results/analysis/20260908_h221_86m_tuning/convergence_main.png}
+  \caption{V6 代表性配置的收敛曲线。步幅裁剪减少了早期 overflow 过冲，并提高后期 HPWL 改善效率。}
+  \label{fig:v6-convergence}
+\end{figure}}{}
+
+\subsection{V7：分阶段压力调度对优化器与步长结论的修正}
+
+V6 表明单一 \code{exact_joint_gp} 阶段难以达到 $86\,\mathrm{M}$。V7 因而采用
+\[
+  \text{cap-15 recovery}
+  \rightarrow \text{bridge}(120)
+  \rightarrow \text{retighten}(180)
+  \rightarrow \text{cap-7 polish}\times2,
+\]
+其中 bridge 使用较低密度压力，retighten 使用较高密度压力，总 GP 预算仍为 300 步。
+表\ref{tab:v7-opt}给出不同优化器在同一链条下的最终 exact 指标。
+
+\begin{table}[!htbp]
+\centering
+\caption{V7：分阶段链中的优化器比较，bridge/retighten 学习率为 $0.002/0.001$}
+\label{tab:v7-opt}
+\small
+\begin{tabular}{lrrl}
+\toprule
+优化器 & final HPWL & final overflow & 是否达到 $88\,\mathrm{M}/7\%$ \\
+\midrule
+Adam & \textbf{87,599,730.55} & 6.9999995\% & 是 \\
+AMSGrad & 89,827,947.94 & 6.9999998\% & 否 \\
+Heavy Ball & 93,534,597.25 & 10.1388\% & 否 \\
+SGD & 93,552,350.68 & 10.1229\% & 否 \\
+Normalized SGD & 94,203,472.85 & 9.9623\% & 否 \\
+AdaGrad & 94,335,504.44 & 6.9999999\% & 否 \\
+Dual Averaging & 94,374,897.03 & 6.9999982\% & 否 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Adam 的学习率呈现明显单峰。bridge/retighten 学习率依次取
+$0.001/0.0005$、$0.002/0.001$ 与 $0.004/0.002$ 时，分别得到
+$89.26\,\mathrm{M}$、$87.60\,\mathrm{M}$ 和 $88.61\,\mathrm{M}$。最佳链在各阶段的 exact audit 为
+\[
+\begin{aligned}
+109.84\,\mathrm{M}@7.82\%
+&\rightarrow96.92\,\mathrm{M}@15.00\%\\
+&\rightarrow87.10\,\mathrm{M}@15.00\%\\
+&\rightarrow90.33\,\mathrm{M}@6.86\%\\
+&\rightarrow87.60\,\mathrm{M}@7.00\%.
+\end{aligned}
+\]
+这一轨迹清楚展示了 bridge 的作用：先以容量裕量换取大幅 HPWL 压缩，再由 retighten 与 exact recovery
+返回目标密度带。V7 达到 $88\,\mathrm{M}/7\%$，但仍未达到本文最终的 $86\,\mathrm{M}/<7\%$ 目标。
+
+\IfFileExists{../framework/results/analysis/20260908_h252_h257_chain/optimizer_screen.png}{%
+\begin{figure}[!htbp]
+  \centering
+  \includegraphics[width=0.78\textwidth]{../framework/results/analysis/20260908_h252_h257_chain/optimizer_screen.png}
+  \caption{V7 分阶段链的优化器终态比较。能否在 retighten 预算内返回 $7\%$ 是区分优化器的重要条件。}
+  \label{fig:v7-optimizer}
+\end{figure}}{}
+
+终态散点只能回答“最后到达哪里”，不能显示不同优化器在 bridge 与 retighten 切换时的瞬态行为。
+图\ref{fig:v7-convergence}进一步给出完整 300 步 exact 轨迹：前 120 步允许以较高 overflow 换取
+HPWL 压缩，第 121 步切入 retighten 后，各方法先出现一次压力重置引起的 excursion，随后向 $7\%$
+目标带恢复。Adam 的优势并非全程单调下降，而是能够在较低 HPWL 区域完成后期密度恢复。
+
+\IfFileExists{../framework/results/analysis/20260908_h252_h257_chain/convergence_hpwl.png}{%
+\begin{figure}[!htbp]
+  \centering
+  \includegraphics[width=0.90\textwidth]{../framework/results/analysis/20260908_h252_h257_chain/convergence_hpwl.png}
+  \vspace{0.5em}
+  \includegraphics[width=0.90\textwidth]{../framework/results/analysis/20260908_h252_h257_chain/convergence_overflow.png}
+  \caption{V7 优化器与学习率实验的完整收敛曲线：exact HPWL（上）与 exact overflow（下）。横轴按全局 GP 步编号；第 1--120 步为 bridge，第 121--300 步为 retighten，圆点表示阶段边界的 fresh exact audit。}
+  \label{fig:v7-convergence}
+\end{figure}}{}
+
+\subsection{阶段性判断}
+
+上述结果支持如下判断：
+\begin{enumerate}
+  \item 自适应逐坐标缩放能够显著改善 exact active-set 方向的可用性，但最优优化器依赖阶段结构；
+  单阶段纯下降中 AMSGrad 最优，分阶段 bridge/retighten 链中 Adam 最优。
+  \item 学习率与坐标裁剪需要联合解释。$\eta$ 决定全局尺度，$m$ 控制局部极端坐标；适度裁剪可以避免
+  早期 active-set 突变消耗大量密度恢复预算。
+  \item 仅调高 $\lambda$ 不能解决方向缺少目的地信息的问题。过大的 $\lambda$ 会得到低 overflow，
+  却可能浪费可用于降低 HPWL 的容量裕量。
+  \item 从 $94.06\,\mathrm{M}$ 到 $87.60\,\mathrm{M}$ 的主要收益来自阶段化机制，而非局部超参数微调。
+  因此后续重点应从“继续大规模扫 optimizer”转向“构造更有信息的非局部非光滑方向”。
+\end{enumerate}
+
+\section{第二部分工作：五类 Non-local Non-smooth 方向方案}
+
+\subsection{共同动机：局部次梯度为什么容易失效}
+
+Exact overlap density 对单元位置是分段低阶函数。当单元在当前 overlap 几何区域内移动时，局部梯度可能
+很小甚至为零；只有跨过 bin edge 后，密度能量才发生明显变化。于是可能出现
+\[
+  D(x+\delta)=D(x)\quad (\norm{\delta}\le r_0),
+  \qquad
+  D(x+\Delta)<D(x)\quad (\norm{\Delta}>r_0).
+\]
+此外，局部密度排斥通常只表达“离开拥塞 bin”，却不表达“应前往哪个空闲区域”。这与平滑
+DCT/Poisson 方法形成鲜明对比：后者通过全局势场把远处空闲容量传播到当前位置，方向稠密且随位置连续变化，
+因此早期下降很快；代价是优化目标已经成为平滑 surrogate，且场的改善不等同于 exact overflow 的改善。
+
+五个方案遵循同一原则：\textbf{保留 exact objective 和 exact evaluator，只扩充 direction oracle。}
+共同更新骨架为
+\begin{equation}
+  g_D^{(m)}=\alpha_E\widehat g_D^{\mathrm{exact}}
+  +\alpha_A\widehat g_D^{(m,\mathrm{aux})},
+  \qquad
+  g_k=\rmsnorm\!\left(\widehat g_W+\lambda_k\widehat g_D^{(m)}\right),
+  \label{eq:nonlocal-common}
+\end{equation}
+其中 $m$ 表示具体 oracle。每一步均按式\eqref{eq:unconditional-update}无条件应用；exact audit 仅用于
+测量、$\lambda$ 反馈和日志，不触发 hard constraint、candidate acceptance、backtracking、rollback 或
+best-feasible restore。五个模块相互独立，不共享 occupancy cache、optimizer moment 或隐式状态。
+
+\subsection{方案一：多尺度 Density \texorpdfstring{$\varepsilon$}{epsilon}-Active Oracle}
+
+\subsubsection{动机}
+
+单一 $\varepsilon=0$ 的 exact density 次梯度只看当前 active geometry。若同时观察邻域内多个潜在 active face，
+就可能在真正跨越几何断点之前获得非零方向，从而缓解 zero-subgradient 和过度局部的问题。
+
+\subsubsection{数学构造}
+
+定义 enlarged subdifferential
+\begin{equation}
+  \partial_{\varepsilon}D(x)=
+  \operatorname{conv}
+  \left(
+  \bigcup_{\norm{z-x}_{\infty}\le\varepsilon}\partial D(z)
+  \right).
+  \label{eq:epsilon-subdiff}
+\end{equation}
+实际计算只取有限尺度
+\[
+  \varepsilon_s\in\{0.25h,0.5h,h,2h\},
+\]
+其中 $h$ 为 bin 特征尺寸。每个尺度先独立归一化，再进行凸组合：
+\begin{equation}
+  g_A^{\mathrm{MS}}=
+  \frac{1}{|\mathcal S_+|}
+  \sum_{s\in\mathcal S_+}
+  \frac{g_D^{(\varepsilon_s)}}
+  {\rms(g_D^{(\varepsilon_s)})+\epsilon}.
+  \label{eq:multiscale}
+\end{equation}
+由于 $\varepsilon=0$ 的 exact density direction 已在公共项中单独存在，辅助尺度不重复包含它。
+
+\subsubsection{预期作用与边界}
+
+该方法仍由有限个 piecewise exact active-face 方向构成，不定义新的平滑密度目标。其优势是实现轻量、
+与 exact overlap 几何关系紧密；局限是信息仍然局部，无法显式指出远处空闲容量的位置。
+
+\subsection{方案二：累计切割压力（Cumulative Cut Pressure）}
+
+\subsubsection{动机}
+
+若某条竖直切割线左侧的单元总面积超过左侧可用容量，则无论局部如何重排，必有一部分面积跨越该切割线。
+这是一条来自面积守恒的全局必要条件，可为局部密度方向提供长程信号。
+
+\subsubsection{数学构造}
+
+对竖直 cut $c$，定义左侧面积与容量
+\begin{align}
+  M_L(c)&=\sum_{b:x_b<c}\operatorname{occ}_b,\\
+  C_L(c)&=\sum_{b:x_b<c}\rho_tA_b,
+\end{align}
+以及累计盈余
+\begin{equation}
+  S_x(c)=M_L(c)-C_L(c).
+  \label{eq:cut-surplus}
+\end{equation}
+若 $S_x(c)>0$，左侧至少有 $S_x(c)$ 的面积需要向右跨越 cut。可构造分段线性势
+\begin{equation}
+  H_c(x_i)=\pos{S_x(c)}\pos{c-x_i},
+  \label{eq:cut-potential}
+\end{equation}
+其负次梯度把 cut 左侧单元推向右侧。对 $S_x(c)<0$、水平 cut 以及相反方向作对称处理，叠加所有 cut
+即可获得多尺度全局容量压力。
+
+\subsubsection{预期作用与边界}
+
+该方法只需 prefix scan 与 cell lookup，复杂度接近 $O(B+N)$；不使用 FFT、Poisson、Gaussian 或
+平滑密度图。其局限在于方向主要沿坐标轴，对障碍物和不规则二维空白区域的表达能力弱于二维运输或电荷场。
+
+\subsection{方案三：盈余--空闲运输方向（Surplus--Deficit Transport）}
+
+\subsubsection{动机}
+
+局部排斥只回答“从哪里离开”，运输模型进一步回答“应该去哪里”。令
+\begin{equation}
+  s_b=\pos{\operatorname{occ}_b-C_b},
+  \qquad
+  d_b=\pos{C_b-\operatorname{occ}_b},
+  \qquad C_b=\rho_tA_b.
+  \label{eq:supply-demand}
+\end{equation}
+其中 $s_b$ 是源端盈余，$d_b$ 是目标端空闲容量。
+
+\subsubsection{数学构造}
+
+理想离散运输计划为
+\begin{equation}
+\begin{aligned}
+  \min_{\pi\ge0}\quad &\sum_{b,c}\pi_{bc}
+  \left(|x_b-x_c|+|y_b-y_c|\right),\\
+  \text{s.t.}\quad &\sum_c\pi_{bc}\le s_b,
+  \qquad
+  \sum_b\pi_{bc}\le d_c.
+\end{aligned}
+\label{eq:transport}
+\end{equation}
+源 bin $b$ 的期望位移向量为
+\begin{equation}
+  v_b=\frac{\sum_c\pi_{bc}(p_c-p_b)}
+  {\sum_c\pi_{bc}+\epsilon},
+  \qquad g_b^{T}=-v_b.
+  \label{eq:transport-direction}
+\end{equation}
+于是梯度下降 $x\leftarrow x-\eta g^T$ 会将源区单元推向空闲区。
+
+\subsubsection{当前原型边界}
+
+当前轻量原型采用 coarse grid 与最近 deficit 的稀疏匹配思路，并非已经求解式\eqref{eq:transport}的完整
+min-cost flow。正式报告结果时应称为“粗粒度盈余--空闲运输方向原型”，并同步记录是否满足质量守恒、
+运输质量和平均距离；只有实现完整约束后，才能称为严格最优运输 oracle。
+
+\subsection{方案四：非光滑容量电荷场（Capacity Charge Field）}
+
+\subsubsection{动机}
+
+希望获得类似电势布局的远程 capacity awareness，但不引入 Poisson 方程与光滑电势目标。
+将一轮 fresh occupancy 下的容量不平衡冻结为
+\begin{equation}
+  q_b=\operatorname{occ}_b-C_b.
+  \label{eq:charge}
+\end{equation}
+$q_b>0$ 表示拥塞源，$q_b<0$ 表示空闲容量。
+
+\subsubsection{数学构造}
+
+采用 Manhattan 距离与有限支撑 hinge kernel
+\begin{equation}
+  r_{ib}=|x_i-c_b^x|+|y_i-c_b^y|,
+  \qquad K_R(r)=\pos{R-r}.
+\end{equation}
+辅助势为
+\begin{equation}
+  H_C(x\mid q)=\sum_iA_i\sum_bq_bK_R(r_{ib}).
+  \label{eq:charge-potential}
+\end{equation}
+对冻结的 $q$ 取次梯度，正电荷产生排斥，负电荷产生吸引；$r_{ib}\ge R$ 时相互作用为零。
+该方法只包含绝对值和 hinge，因而是分段线性的非光滑场，而不是 $1/r$ 电势或谱卷积。
+
+\subsubsection{预期作用与边界}
+
+二维有限支撑场比 cut pressure 更适合表达不规则空闲区，并可通过
+$R\in\{2h,4h,8h\}$ 控制作用尺度。主要风险是人工场与 exact overflow 的相关性不足，或大量稀疏方向被
+全局 RMS 归一化过度放大。因此需要记录 active RMS、非零比例、符号契约和有效相互作用对数。
+
+\subsection{方案五：有限半径 Exact Coordinate Oracle}
+
+\subsubsection{动机}
+
+当 infinitesimal 次梯度为零时，可直接用有限位移跨越平台。对单元 $i$ 的四个坐标方向
+$u\in\{+e_x,-e_x,+e_y,-e_y\}$，探测 exact density energy 的单边 secant：
+\begin{equation}
+  s_{i,u}^{D}(\delta)=
+  \frac{D(x+\delta u)-D(x)}{\delta}.
+  \label{eq:finite-secant}
+\end{equation}
+选择能够降低 $D$ 的方向作为辅助 gradient-like vector，但不直接提交 probe candidate。
+实际布局仍由统一优化器按式\eqref{eq:unconditional-update}连续更新。
+
+\subsubsection{断点与计算预算}
+
+优先选择接近下一几何事件的 $\delta$，例如单元边界跨越 bin boundary；对未来的有限半径 HPWL oracle，
+则可考虑 pin 进入/离开 net 极值集合的断点。由于 exact probe 需要在短生命周期布局副本上重新评价，
+该方案计算量最大，应优先探测局部 wire/exact-density 梯度范数较小的单元：
+\begin{equation}
+  r_i=\sqrt{g_{W,i,x}^2+g_{W,i,y}^2+g_{D,i,x}^2+g_{D,i,y}^2}.
+\end{equation}
+修订后的 oracle 支持按低信息程度选点和 $\pm x,\pm y$ 四方向，并令辅助项只使用 density secant，
+避免在公共框架外再次混合 HPWL 与 density。由于 exact probe 代价较高，本次 300 步正式记录采用
+\code{probe_count=1}、$R=h$ 的快速配置；它验证的是单探针机制，不代表原计划 32 个探针的完整效果。
+
+\subsection{五种方向的互补关系}
+
+\begin{table}[!htbp]
+\centering
+\caption{五类非局部非光滑方向的作用尺度与核心信息}
+\label{tab:five-oracles}
+\small
+\begin{tabularx}{\textwidth}{>{\raggedright\arraybackslash}p{2.9cm}
+>{\raggedright\arraybackslash}p{2.5cm}
+>{\raggedright\arraybackslash}X
+>{\raggedright\arraybackslash}p{3.2cm}}
+\toprule
+方案 & 信息尺度 & 核心补充信息 & 主要风险/限制 \\
+\midrule
+多尺度 active-set & 局部到邻域 & 邻近 active face 与即将出现的几何 kink & 仍不指向远处空闲区 \\
+累计切割压力 & 全局一维投影 & 面积守恒下必须跨 cut 的净流量 & 轴对齐，二维障碍表达有限 \\
+盈余--空闲运输 & 全局二维 & 从拥塞源到空闲 sink 的目的地 & 匹配质量、守恒和 cell 映射 \\
+容量电荷场 & 有限半径二维 & 正盈余排斥、负容量吸引 & 场与 exact overflow 的一致性 \\
+有限半径 secant & 单元级有限位移 & 跨越局部平台后的 exact 变化 & 评价开销高，需稀疏选点 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+这五类方案并非同一种机制的不同参数：多尺度 active-set 扩大局部广义梯度；cut pressure 编码全局守恒；
+transport 显式寻找目的地；charge field 提供有限支撑二维远程作用；finite-radius secant 则跨越
+infinitesimal oracle 看不见的平台。独立模块对照的价值正在于分离这些信息来源。
+
+\section{五方案的统一实验与最新数值结果}
+
+\subsection{输入、共同参数与证据边界}
+
+最新批次使用的输入为外部 \code{h221_a1_fine/best.pl}，其 SHA-256 为
+\par\noindent\hspace*{2em}{\small\path{3129818214a86ba0ee88d281448d782bfb6285186dd7ad4efafb95bc1342e348}}。
+在 canonical $512\times512$、target density $1.0$ 和 movable clamp 后，统一起点为
+\[
+  W(x_0)=109{,}425{,}511.1896,
+  \qquad O(x_0)=7.803537\%.
+\]
+该 SHA 与 V5/V6 使用的历史 \code{h221_dct_poisson_512/best.pl} 不同，故两组结果只能作数值参照，
+不能作为严格的单变量因果比较。
+
+五个模块均运行 300 步，固定 AMSGrad、$\eta=0.002$、maximum delta $m=0.25$、
+$(\beta_1,\beta_2)=(0.90,0.99)$、exact/auxiliary density weights $1.0/0.1$，并采用
+$15\%\rightarrow7\%$ trajectory $\lambda$、update interval $2$、$\lambda\in[0.01,256]$。
+evaluator、threads=1 和 metrics-only retention 完全一致。每个更新均无条件应用，只有 die clamp；
+日志中的 accepted=300/rejected=0 表示 300 个 applied steps，并不表示存在候选接受门控。
+
+模块特有参数分别为：Multi-scale 使用
+$\{0.25h,0.5h,h,2h\}$，Transport 使用 $32\times32$ coarse bins，Charge 使用 $R=4h$，
+Finite-radius 使用 $R=h$ 且 \code{probe_count=1}。运行元数据记录的源码状态为
+\code{e230425 + dirty}；对应的方向符号与尺度修复随后提交为 \code{a5e3042}，当前结果图排除了未完成的
+多探针 finite 运行。当前批次尚未包含同骨架的 exact-only control，因此表\ref{tab:nonlocal-main}只能回答
+“五个当前配置各自表现如何”，不能单独量化 auxiliary oracle 相对于 $\alpha_A=0$ 的净贡献。
+
+\subsection{终态与轨迹最优值}
+
+Pure descent 的 stage 输出是最后一个 applied state，不会恢复中途最优布局。因此表\ref{tab:nonlocal-main}
+同时列出 best-any、best-feasible-observed 与 last。best-any 若对应 $O>7\%$，只能用于解释探索能力；
+best-feasible-observed 是离线轨迹统计，不是算法内部 acceptance 或 restore。
+
+\begin{table}[!htbp]
+\centering
+\caption{五个 non-local 模块的 300 步 exact 轨迹摘要；HPWL 单位为 $10^6$}
+\label{tab:nonlocal-main}
+\scriptsize
+\begin{tabular}{lrrrrrrr}
+\toprule
+方案 & best-any & 对应 ovf. & best-feas. & 对应 ovf. & 迭代 & last HPWL & last ovf. \\
+\midrule
+Multi-scale active & 89.842 & 8.6038\% & 95.744 & 6.8274\% & 128 & 126.923 & 8.9225\% \\
+Cut pressure & 91.876 & 26.6971\% & -- & -- & -- & 183.712 & 13.1667\% \\
+Transport & 91.943 & 25.7410\% & \textbf{92.211} & 6.8214\% & 255 & 95.436 & 8.8449\% \\
+Charge field & \textbf{88.777} & 10.7042\% & 113.346 & 6.9976\% & 282 & 120.303 & \textbf{6.8218\%} \\
+Finite-radius ($p=1$) & 91.873 & 25.9219\% & 92.383 & \textbf{6.5954\%} & 266 & \textbf{93.504} & 7.3593\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[!htbp]
+\centering
+\caption{五个模块的恢复时刻、峰值 excursion 与终态审计}
+\label{tab:nonlocal-audit}
+\scriptsize
+\begin{tabular}{lrrrrrr}
+\toprule
+方案 & 首次 $\le7\%$ & peak ovf. & final $D$ & final $\rho_{\max}$ & runtime/s & final HPWL 变化 \\
+\midrule
+Multi-scale active & 102 & 32.7698\% & 485,454.92 & 2.3777 & 73.85 & $+15.99\%$ \\
+Cut pressure & -- & 35.3097\% & 628,188.18 & 2.1042 & 30.91 & $+67.89\%$ \\
+Transport & 120 & 35.1855\% & 381,614.48 & 2.3364 & 31.50 & $-12.78\%$ \\
+Charge field & 282 & 31.9383\% & 353,987.37 & 2.2752 & 43.83 & $+9.94\%$ \\
+Finite-radius ($p=1$) & 123 & 35.1993\% & 234,742.34 & 2.0255 & 101.30 & $-14.55\%$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+五种轨迹在前 17--19 步均出现 $31.94\%$--$35.31\%$ 的 overflow 峰值。这并非 hard constraint
+失效，而是当前 pure-descent 协议允许的真实 excursion；但峰值远高于 $15\%$ soft reference，说明
+$\lambda$ 反馈和第一阶段步幅仍偏慢。随后各方法呈现明显分化。
+
+\IfFileExists{../framework/results/analysis/20260908_h221_nonlocal_fixed_final/hpwl.png}{%
+\begin{figure}[!htbp]
+  \centering
+  \includegraphics[width=0.80\textwidth]{../framework/results/analysis/20260908_h221_nonlocal_fixed_final/hpwl.png}
+  \vspace{0.4em}
+  \includegraphics[width=0.80\textwidth]{../framework/results/analysis/20260908_h221_nonlocal_fixed_final/overflow.png}
+  \caption{五个模块的 exact HPWL（上）与 exact overflow（下）轨迹。虚线为 $7\%$，点线为
+  $15\%$ soft reference；所有曲线均为无接受、无回滚的 300 步连续更新。}
+  \label{fig:nonlocal-convergence}
+\end{figure}}{}
+
+\subsection{分模块结果解释}
+
+\paragraph{Multi-scale active。}
+该方向在第 102 步首次回到 $7\%$，并于第 128 步观察到
+$95.744\,\mathrm{M}@6.827\%$，相对本批次起点降低 $12.50\%$ HPWL；但第 193 步的最低 HPWL
+$89.842\,\mathrm{M}$ 已不可行，随后轨迹反向恶化，最终为 $126.923\,\mathrm{M}@8.923\%$。
+这说明多尺度 active face 含有瞬态有效信息，但当前固定权重与长时动量不能维持稳定交换。
+
+\paragraph{Cut pressure。}
+Cut 在 300 步内从未回到 $7\%$，终态 HPWL 增至 $183.712\,\mathrm{M}$，是本批次明确的负结果。
+其最小 HPWL 出现在高达 $26.70\%$ overflow 的第 39 步；随后累计切割压力与 wire 方向长期失配。
+该结果否定的是当前轴向聚合、权重和控制配置，尚不能外推为所有 cut-based capacity oracle 均无效。
+
+\paragraph{Transport。}
+Transport 在第 120 步首次回到 $7\%$，并在第 255 步观察到全批次最低可行 HPWL
+$92.211\,\mathrm{M}@6.821\%$，相对起点降低 $15.73\%$。其终态仍回升到
+$95.436\,\mathrm{M}@8.845\%$，说明“源到 sink”的目的地信息能够产生有效可行点，但当前 controller
+无法把恢复后的轨迹锁定在目标带内。
+
+\paragraph{Charge field。}
+Charge 给出全批次最低 best-any HPWL $88.777\,\mathrm{M}$，但对应 overflow 为 $10.704\%$。
+它到第 282 步才首次可行，best-feasible-observed 为 $113.346\,\mathrm{M}$，终态虽达到
+$6.822\%$，HPWL 却比起点高 $9.94\%$。该现象表明容量吸引/排斥能完成密度恢复，但与 wire 方向的
+后期协调不足，恢复代价过高。
+
+\paragraph{Finite-radius。}
+单探针配置在第 266 步观察到 $92.383\,\mathrm{M}@6.595\%$，终态
+$93.504\,\mathrm{M}@7.359\%$，具有全批次最低 last HPWL，但仍未满足最终 overflow 条件。
+其运行时间为 101.30 s，约为 Transport 的 3.2 倍；即使每轮只探测一个低信息单元，exact secant
+成本仍然显著。该结果提供了跨越局部平台的正信号，同时说明扩大 probe count 前必须先优化评价预算。
+
+\IfFileExists{../framework/results/analysis/20260908_h221_nonlocal_fixed_final/hpwl_overflow_phase.png}{%
+\begin{figure}[!htbp]
+  \centering
+  \includegraphics[width=0.76\textwidth]{../framework/results/analysis/20260908_h221_nonlocal_fixed_final/hpwl_overflow_phase.png}
+  \caption{五个模块在 $(O,W)$ 平面中的相轨迹。Transport 与 finite-radius 多次穿越 $7\%$ 邻域但未稳定停留；
+  Charge 完成密度回收却沿高 HPWL 分支结束；Cut 则持续进入高代价区域。}
+  \label{fig:nonlocal-phase}
+\end{figure}}{}
+
+\subsection{本批次能够与不能支持的结论}
+
+当前结果支持两点。其一，non-local oracle 并非完全没有下降信息：Transport 与 finite-radius 均产生了
+约 $92.2\,\mathrm{M}$ 的中途可行状态，明显优于各自起点。其二，主要困难已经从“是否能找到下降方向”
+转变为“能否在无接受机制下稳定留在 $7\%$ 附近”；最终只有 Charge 可行，但其 HPWL 更差。
+
+当前结果不能支持以下结论：
+\begin{enumerate}
+  \item 不能把 $88.777\,\mathrm{M}@10.704\%$ 称为正式最优结果，也不能把离线统计的中途可行点当作模块输出；
+  \item 不能因 Cut 的单一配置失败而否定全部切割方法；
+  \item 不能把单探针 Finite-radius 结果外推到 32 探针；
+  \item 不能在缺少同骨架 exact-only control 时宣称收益全部来自 auxiliary oracle。
+\end{enumerate}
+下一轮应优先补充 $\alpha_A=0$ 对照、早期步幅/$\lambda$ 响应消融，并在 telemetry 中持久化
+$\lambda_k$、step max、clipped fraction、auxiliary active RMS 与 wire--density cosine，以解释当前的
+大幅循环轨迹。
+
+\section{讨论：为何平滑化方法下降快，而局部非光滑方法容易停滞}
+
+\subsection{信息传播范围不同}
+
+局部 exact density 次梯度由当前重叠的 bin 边界决定，其感受野有限。远处存在大块空闲区时，局部方向通常
+无法感知。Poisson/DCT 方法求解全局势场，相当于将全芯片容量不平衡传播到每个位置，因而几乎所有可动单元
+都获得稠密方向。这是平滑方法早期下降快的首要原因，而不是 exact 目标在数学上“不可优化”。
+
+\subsection{平台、active-set 抖动与动量失配}
+
+在 piecewise 区域内部，exact 次梯度可能为零；跨越边界后又会突变。统一步长因此面临两难：步长小则长期
+停在平台，步长大则同时跨越大量 active face，造成 overflow 冲击。动量还可能在 active-set 切换后继续沿旧方向
+推进。V6 中适度 maximum-delta 裁剪有效，正是因为它限制了少数极端坐标，而没有令所有坐标同步缩步。
+
+\subsection{目标冲突与标量 \texorpdfstring{$\lambda$}{lambda} 的局限}
+
+HPWL 方向常将单元拉向网络几何中心，密度方向则将其推出拥塞区。单一标量 $\lambda$ 只控制总体强弱，
+不能解决不同区域、不同单元上的方向冲突，也不能创造不存在的目的地信息。V6 中 trajectory $\lambda$ 将
+overflow 压得很低却没有达到 86M，说明“更强密度惩罚”不等于“更好的 HPWL--overflow 交换”。
+
+\subsection{平滑化方法的优势与边界}
+
+平滑化带来连续、稠密、低噪声的方向，适合大步推进与 Nesterov/Adam 类加速；但其 surrogate 的下降并不保证
+exact HPWL 或 exact overflow 同步下降，并且平滑尺度可能掩盖细粒度几何断点。因此本项目的研究方向不是简单
+排斥平滑信息，而是尝试用 non-local、non-smooth、可解释 oracle 获得类似的长程信息，同时保持 exact evaluator
+作为唯一结论依据。
+
+\section{结论与下一步工作}
+
+本文阶段性工作可归纳为四点。第一，无逐步 acceptance 的连续非光滑下降机制能够从 H221 起点返回 $7\%$
+密度带；AMSGrad 在 V5 的 100 步单阶段筛选中最佳。第二，V6 的 300 步调参表明学习率 $0.002$ 与
+maximum delta $0.25$ 的组合显著优于默认大步幅，但单阶段最优值 $94.06\,\mathrm{M}$ 仍未达到 86M。
+第三，V7 的 bridge/retighten/recovery 分阶段链将结果推进到 $87.60\,\mathrm{M}@7.00\%$，说明阶段结构
+比继续扩大超参数扫描更重要。第四，五个 non-local 模块的最新 300 步结果进一步表明，Transport 和
+单探针 Finite-radius 能产生 $92.2\,\mathrm{M}$ 量级的中途可行状态，但没有以可行终态结束；Charge 能返回
+$7\%$ 内却牺牲 HPWL，Cut 在当前配置下失败。五种配置均未达到 $86\,\mathrm{M}/<7\%$。
+
+因此，下一阶段不宜直接扩大五模块融合或进行大规模 optimizer 扫描。优先事项是补齐同一 common engine 下的
+exact-only control，校准最初 20 步的 step/$\lambda$ 响应，并记录 auxiliary 方向稀疏度、尺度与
+wire--density cosine。若 Transport/Finite-radius 在该对照下仍保持正信号，再研究自适应 auxiliary weight、
+更快的 finite probe 和不依赖硬接受门控的阻尼机制。所有后续结论仍应同时报告 last、best-feasible-observed
+和 best-any，避免将不可行轨迹点或离线最优点冒充 stage 输出。
+
+\begin{thebibliography}{9}
+\bibitem{adam}
+D. P. Kingma and J. Ba,
+``Adam: A Method for Stochastic Optimization,''
+\textit{International Conference on Learning Representations}, 2015.
+
+\bibitem{amsgrad}
+S. J. Reddi, S. Kale, and S. Kumar,
+``On the Convergence of Adam and Beyond,''
+\textit{International Conference on Learning Representations}, 2018.
+
+\bibitem{dualavg}
+Y. Nesterov,
+``Primal-dual subgradient methods for convex problems,''
+\textit{Mathematical Programming}, vol. 120, pp. 221--259, 2009.
+
+\bibitem{eplace}
+J. Lu, H. Zhuang, P. Chen, H. Chang, C.-C. Chang, Y.-C. Wong, L. Sha, D. Huang, Y. Luo,
+C.-C. Teng, and C.-K. Cheng,
+``ePlace: Electrostatics-based placement using fast Fourier transform and Nesterov's method,''
+\textit{Proceedings of the 51st ACM/EDAC/IEEE Design Automation Conference}, 2014.
+\end{thebibliography}
+
+\end{document}

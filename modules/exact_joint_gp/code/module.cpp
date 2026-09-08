@@ -27,6 +27,9 @@ void register_exact_joint_gp(ModuleRegistry& registry) {
         p.degree_limit=c.contains("hpwl_direction")
             ? c.at("hpwl_direction").value("degree_limit",c.value("degree_limit",100))
             : c.value("degree_limit",100);
+        p.net_batch.weight=nested(c,"net_batch","weight",p.net_batch.weight);
+        p.net_batch.degree_limit=nested_int(c,"net_batch","degree_limit",
+                                             p.net_batch.degree_limit);
         p.step_fraction=nested(c,"optimizer","learning_rate",c.value("learning_rate",.003));
         p.max_step_multiplier=nested(c,"optimizer","maximum_delta",c.value("maximum_delta",4.0));
         if (c.contains("optimizer") && c.at("optimizer").contains("name")) {

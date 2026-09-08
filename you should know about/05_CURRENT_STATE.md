@@ -163,6 +163,25 @@ ratio λ(ob=.085, itv=2, ds=.5) → best-feasible **94,061,868.14 @ 6.7474%**，
 retention 契约，checkpoint SHA-256 全程未变。E 阶段触发条件未满足（最后 50 轮
 仍下降 0.647% > 0.2%），未实现 schedule；证据支持的下一步是最佳配置延长到 500 轮。
 
+### 3.4 V7 H252-H257 四模块联合顺序求解器（H221 → 88M/7% 命中）
+
+问题：把 H252 cap-15 recovery、H253 bridge（低密度压力）、H254 retighten（高密度压力）、
+H255/H257 polish 组装为一条 microkernel 五阶段链（`exact_recovery → exact_joint_gp →
+exact_joint_gp → exact_recovery ×2`），300 步 GP 预算（H253 120 + H254 180，recovery 共
+10 sweeps 作为确定性收尾），从同一 h221 checkpoint 筛选 optimizer 与步长。为复现历史链，
+`exact_recovery` 与 `exact_joint_gp` 的 module adapter 各扩展了少量可选 JSON 键
+（axis_separated/breakpoint_oracle/net_block 族与 net_batch 族，默认保持原行为）。
+
+**结果：CTRL_ADAM（adam，lr .002/.001，md 4.0，dreamplace λ）final 87,599,730.55 @
+6.9999995%，命中 88M/7%**，相对起点 −20.3%，优于历史 208 步链（87.63M）和 V6 单阶段
+最好结果（94.06M）。optimizer 排名 adam < amsgrad < {sgd≈heavy-ball} < normalized-sgd <
+{adagrad≈dual-averaging}；非自适应矩方法（sgd/heavy-ball/normalized-sgd）在 H254 高压力
+下 180 步内无法回到 ≤7%（链条终止在 ~10%）。adam 步长单峰：.001 < .004 < .002。
+H252 边界 96,918,697.4251 与 2026-09-06 历史复现逐位一致。证据：
+`framework/results/analysis/20260908_h252_h257_chain/`（report.md、runs.csv、
+per_iteration_metrics.csv、stage_boundaries.csv、5 张图，本地不入库）；
+协议 threads=16、metrics-only、输入 hash 不变。
+
 ## 4. 本次微内核回归证据
 
 ### 4.1 Non-local oracle implementation health smoke（H375 canonical input）
