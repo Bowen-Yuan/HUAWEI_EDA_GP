@@ -11,10 +11,10 @@ set(NUMERIC_KERNEL_SOURCES
   framework/kernel/src/hpwl.cpp
   framework/kernel/src/optimizer.cpp
   framework/kernel/src/step_policy.cpp
+  framework/kernel/src/lambda_controller.cpp
   framework/kernel/src/nonlocal_descent.cpp)
 set(MODULE_ALGORITHM_SOURCES
   modules/exact_joint_gp/code/batch_acceptance.cpp
-  modules/exact_joint_gp/code/lambda_controller.cpp
   modules/exact_joint_gp/code/placer.cpp
   modules/exact_recovery/code/compact_recovery.cpp
   modules/exact_recovery/code/recovery.cpp
@@ -111,3 +111,7 @@ target_sources(nsgp_adaptive_tests PRIVATE
 target_link_libraries(nsgp_adaptive_tests PRIVATE nsgp_numeric_kernel)
 target_include_directories(nsgp_adaptive_tests PRIVATE modules/adaptive_lambda_gp/code)
 add_test(NAME nsgp_adaptive_lambda_contracts COMMAND nsgp_adaptive_tests)
+
+add_executable(nsgp_nonlocal_oracle_tests tests/test_nonlocal_oracle_contracts.cpp)
+target_link_libraries(nsgp_nonlocal_oracle_tests PRIVATE nsgp_numeric_kernel)
+add_test(NAME nsgp_nonlocal_oracle_contracts COMMAND nsgp_nonlocal_oracle_tests)

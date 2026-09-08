@@ -49,7 +49,8 @@ void LambdaController::initialize(const Database& db,
     }
     previous_hpwl_ = hpwl;
     previous_overflow_ = overflow;
-    initial_overflow_ = overflow;
+    initial_overflow_ = config_.trajectory_start_overflow >= 0.0
+        ? config_.trajectory_start_overflow : overflow;
     integral_error_ = 0.0;
 }
 

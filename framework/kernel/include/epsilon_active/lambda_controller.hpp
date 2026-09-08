@@ -19,6 +19,9 @@ struct LambdaConfig {
     Real stop_overflow = 0.07;
     Real hpwl_baseline = 0.0;
     Real overflow_baseline = 0.07;
+    // A non-negative value is the soft trajectory reference start.  The
+    // historical default (-1) retains initial-overflow behavior.
+    Real trajectory_start_overflow = -1.0;
     int update_interval = 25;
     int trajectory_horizon = 550;
     Real control_min = 1.0e-6;

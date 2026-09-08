@@ -1,0 +1,1 @@
+{"name":"nonlocal_primary_finite_fast","compliance_mode":"challenge_nonsmooth","density":{"bins_x":512,"bins_y":512,"target_density":1.0},"experiment":{"purpose":"300-round H221 finite-radius verification with 8 exact four-direction probes"},"stages":[{"module":"finite_radius_oracle_gp","config":"../../../modules/finite_radius_oracle_gp/params/fast_300.json"}]}

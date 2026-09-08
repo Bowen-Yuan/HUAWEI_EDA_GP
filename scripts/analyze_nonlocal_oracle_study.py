@@ -6,10 +6,10 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 
 
-def rows(root):
+def rows(root, prefix):
     result = []
     for run in sorted(Path(root).iterdir()):
-        if "nonlocal_primary_" not in run.name or run.name.endswith("_finite"):
+        if prefix not in run.name or run.name.endswith("_finite"):
             continue
         path = run / "trajectory.csv"
         if not path.exists():
@@ -26,10 +26,10 @@ def number(row, key):
 
 
 def main():
-    if len(sys.argv) != 3:
-        raise SystemExit("usage: analyze_nonlocal_oracle_study.py EXPERIMENT_ROOT OUTPUT_DIR")
+    if len(sys.argv) not in (3, 4):
+        raise SystemExit("usage: analyze_nonlocal_oracle_study.py EXPERIMENT_ROOT OUTPUT_DIR [RUN_PREFIX]")
     grouped = {}
-    for name, row in rows(sys.argv[1]):
+    for name, row in rows(sys.argv[1], sys.argv[3] if len(sys.argv) == 4 else "nonlocal_primary_"):
         grouped.setdefault(name, []).append(row)
     output = Path(sys.argv[2]); output.mkdir(parents=True, exist_ok=True)
     for title, field, ylabel, log in [

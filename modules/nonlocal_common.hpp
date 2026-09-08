@@ -10,6 +10,7 @@ inline ea::NonlocalDescentConfig config_from_json(const Json& j) {
     if (j.contains("optimizer")) { const auto& o=j.at("optimizer");
         c.optimizer=ea::parse_optimizer(o.value("name",std::string("amsgrad")));
         c.learning_rate=o.value("learning_rate",c.learning_rate);
+        c.maximum_delta=o.value("maximum_delta",c.maximum_delta);
         c.beta1=o.value("beta1",c.beta1); c.beta2=o.value("beta2",c.beta2);
         c.numerical_epsilon=o.value("numerical_epsilon",c.numerical_epsilon); }
     if (j.contains("direction")) { const auto& d=j.at("direction");
@@ -24,10 +25,11 @@ inline ea::NonlocalDescentConfig config_from_json(const Json& j) {
         c.start_overflow_percent=l.value("start_overflow_percent",c.start_overflow_percent);
         c.stop_overflow_percent=l.value("stop_overflow_percent",c.stop_overflow_percent);
         c.lambda_update_interval=l.value("update_interval",c.lambda_update_interval);
-        c.lambda_kp=l.value("kp",c.lambda_kp); c.lambda_ki=l.value("ki",c.lambda_ki); c.lambda_kd=l.value("kd",c.lambda_kd); }
+    }
+    if (c.maximum_delta <= 0.0) throw std::invalid_argument("optimizer.maximum_delta must be positive");
     return c;
 }
-inline StageStats run(StageContext& x, const Json& j, const ea::AuxiliaryDirection& aux) {
+inline StageStats run(StageContext& x, const Json& j, const ea::AuxiliaryGradient& aux) {
     const auto c=config_from_json(j);
     const auto s=ea::run_nonlocal_descent(x.db,x.density.bins_x,x.density.bins_y,x.density.target_density,c,aux,
         [&](int iteration, ea::Real hpwl, const ea::DensityMetrics& d, ea::Real lambda,
