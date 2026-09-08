@@ -9,7 +9,7 @@ import matplotlib.pyplot as plt
 def rows(root, prefix):
     result = []
     for run in sorted(Path(root).iterdir()):
-        if prefix not in run.name or run.name.endswith("_finite"):
+        if prefix not in run.name or run.name.endswith("_finite") or run.name.endswith("_p8"):
             continue
         path = run / "trajectory.csv"
         if not path.exists():
