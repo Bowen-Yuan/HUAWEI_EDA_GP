@@ -22,7 +22,8 @@ set(MODULE_ALGORITHM_SOURCES
   modules/equal_shape_swap/code/swap_recovery.cpp
   modules/global_capacity_transport/code/coarse_flow.cpp
   modules/global_capacity_transport/code/transport.cpp
-  modules/density_coordinate/code/density_coordinate.cpp)
+  modules/density_coordinate/code/density_coordinate.cpp
+  modules/finite_radius_oracle_gp/code/finite_radius_probe.cpp)
 add_library(nsgp_numeric_kernel ${NUMERIC_KERNEL_SOURCES} ${MODULE_ALGORITHM_SOURCES})
 target_include_directories(nsgp_numeric_kernel PUBLIC framework/kernel/include framework/code third_party)
 target_link_libraries(nsgp_numeric_kernel PUBLIC OpenMP::OpenMP_CXX)
@@ -115,3 +116,11 @@ add_test(NAME nsgp_adaptive_lambda_contracts COMMAND nsgp_adaptive_tests)
 add_executable(nsgp_nonlocal_oracle_tests tests/test_nonlocal_oracle_contracts.cpp)
 target_link_libraries(nsgp_nonlocal_oracle_tests PRIVATE nsgp_numeric_kernel)
 add_test(NAME nsgp_nonlocal_oracle_contracts COMMAND nsgp_nonlocal_oracle_tests)
+
+add_executable(nsgp_experiment_log_tests tests/test_experiment_log_contracts.cpp)
+target_sources(nsgp_experiment_log_tests PRIVATE framework/code/microkernel.cpp)
+target_link_libraries(nsgp_experiment_log_tests PRIVATE nsgp_numeric_kernel)
+if(WIN32)
+  target_link_libraries(nsgp_experiment_log_tests PRIVATE Advapi32)
+endif()
+add_test(NAME nsgp_experiment_log_contracts COMMAND nsgp_experiment_log_tests)

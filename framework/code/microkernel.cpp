@@ -43,7 +43,9 @@ ExactMetrics exact_audit(ea::Database& db, const DensityConfig& config) {
     ea::ExactHpwl hpwl(db);
     ea::ExactOverlapDensity density(
         db, config.bins_x, config.bins_y, config.target_density);
-    const auto d = density.evaluate(0.0, 1.0, nullptr, nullptr);
+    const auto d = density.evaluate(
+        0.0, 1.0, ea::DensityAccumulationMode::DeterministicCanonical,
+        nullptr, nullptr);
     return {hpwl.evaluate(0.0, 1.0, -1, nullptr, nullptr),
             d.energy, d.overflow, d.max_density};
 }
@@ -106,10 +108,11 @@ ExperimentLog::ExperimentLog(const fs::path& output_root,
     std::ofstream(root_ / "params.json") << parameters.dump(2) << '\n';
     trajectory_.open(root_ / "trajectory.csv");
     if (!trajectory_) throw std::runtime_error("cannot create trajectory.csv");
-    trajectory_ << "record_type,stage_index,module,global_iteration,stage_iteration,hpwl,hpwl_before,hpwl_after,"
-                   "overflow_percent_before,overflow_percent_after,"
+    trajectory_ << "record_type,stage_index,module,global_iteration,stage_iteration,hpwl,"
+                   "hpwl_before,hpwl_after,overflow_percent_before,overflow_percent_after,"
                    "density_energy,max_density,iterations,accepted,rejected,"
-                   "objective_evaluations,wall_seconds\n";
+                   "objective_evaluations,local_density_queries,local_hpwl_queries,"
+                   "wall_seconds\n";
 }
 
 void ExperimentLog::record(const StageRecord& r) {
@@ -121,21 +124,30 @@ void ExperimentLog::record(const StageRecord& r) {
                 << r.after.density_energy << ',' << r.after.max_density << ','
                 << r.stats.iterations << ',' << r.stats.accepted << ','
                 << r.stats.rejected << ',' << r.stats.objective_evaluations << ','
+                << r.stats.local_density_queries << ','
+                << r.stats.local_hpwl_queries << ','
                 << r.wall_seconds << '\n';
     trajectory_.flush();
 }
 
 void ExperimentLog::record_iteration(int stage_index, const std::string& module,
                                      const Json& t) {
+    const long long stage_iteration =
+        t.contains("stage_iteration")
+            ? t.at("stage_iteration").get<long long>() : 0;
+    const long long global_iteration =
+        t.value("global_iteration", stage_iteration);
     trajectory_ << "iteration," << stage_index << ',' << module << ','
-                << t.value("global_iteration", t.value("stage_iteration", 0)) << ','
-                << t.value("stage_iteration", 0) << ',' << std::setprecision(14)
-                << t.value("hpwl", 0.0) << ",,,,"
+                << global_iteration << ','
+                << stage_iteration << ',' << std::setprecision(14)
+                << t.value("hpwl", 0.0) << ",,,"
                 << t.value("overflow_percent", 0.0) << ','
                 << t.value("overflow_percent", 0.0) << ','
                 << t.value("density_energy", 0.0) << ','
                 << t.value("max_density", 0.0) << ','
-                << "0,0,0," << t.value("objective_evaluations", 0) << ",0\n";
+                << "0,0,0," << t.value("objective_evaluations", 0) << ','
+                << t.value("local_density_queries", 0) << ','
+                << t.value("local_hpwl_queries", 0) << ",0\n";
     trajectory_.flush();
 }
 
@@ -145,6 +157,7 @@ void ExperimentLog::finish(const ExactMetrics& initial,
     std::ofstream out(root_ / "experiment.md");
     if (!out) throw std::runtime_error("cannot create experiment.md");
     int accepted = 0, rejected = 0, evaluations = 0;
+    int local_density = 0, local_hpwl = 0;
     out << "# Pipeline experiment\n\n## Module chain\n\n";
     for (std::size_t i = 0; i < records_.size(); ++i) {
         if (i) out << " → ";
@@ -152,6 +165,8 @@ void ExperimentLog::finish(const ExactMetrics& initial,
         accepted += records_[i].stats.accepted;
         rejected += records_[i].stats.rejected;
         evaluations += records_[i].stats.objective_evaluations;
+        local_density += records_[i].stats.local_density_queries;
+        local_hpwl += records_[i].stats.local_hpwl_queries;
     }
     out << "\n\n## Exact metrics\n\n"
         << std::setprecision(14)
@@ -166,6 +181,8 @@ void ExperimentLog::finish(const ExactMetrics& initial,
         << "- accepted: " << accepted << "\n"
         << "- rejected: " << rejected << "\n"
         << "- objective evaluations: " << evaluations << "\n"
+        << "- local density queries: " << local_density << "\n"
+        << "- local hpwl queries: " << local_hpwl << "\n"
         << "\n## Retention\n\n"
         << (placement_retained
             ? "A placement was retained only by explicit --save-stage request.\n"

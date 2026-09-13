@@ -27,6 +27,11 @@ void register_exact_joint_gp(ModuleRegistry& registry) {
         p.degree_limit=c.contains("hpwl_direction")
             ? c.at("hpwl_direction").value("degree_limit",c.value("degree_limit",100))
             : c.value("degree_limit",100);
+        if (c.contains("hpwl_direction") &&
+            c.at("hpwl_direction").contains("high_degree_mode")) {
+            p.high_degree_mode=c.at("hpwl_direction").at("high_degree_mode").get<std::string>();
+        }
+        p.preconditioner=c.value("preconditioner",p.preconditioner);
         p.net_batch.weight=nested(c,"net_batch","weight",p.net_batch.weight);
         p.net_batch.degree_limit=nested_int(c,"net_batch","degree_limit",
                                              p.net_batch.degree_limit);

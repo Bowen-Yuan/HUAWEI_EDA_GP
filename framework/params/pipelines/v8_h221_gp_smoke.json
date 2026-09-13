@@ -1,0 +1,11 @@
+{
+  "name": "v8_h221_gp_smoke",
+  "compliance_mode": "challenge_nonsmooth",
+  "density": { "bins_x": 512, "bins_y": 512, "target_density": 1.0 },
+  "stages": [
+    {
+      "module": "exact_joint_gp",
+      "config": "../../../modules/exact_joint_gp/params/v8_smoke_1round.json"
+    }
+  ]
+}

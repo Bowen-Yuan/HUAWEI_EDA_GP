@@ -56,6 +56,10 @@ struct Database {
     std::vector<int> movable_ids;
     std::vector<int> fixed_ids;
     std::vector<int> node_pin_count;
+    // Sum of incident net weights per node.  For unweighted benchmarks this
+    // equals node_pin_count, but weighted benchmarks must precondition by the
+    // actual incident weight, not by raw pin count.
+    std::vector<Real> node_pin_weight_sum;
     std::vector<std::size_t> node_pin_offsets;
     std::vector<std::size_t> node_pin_indices;
     std::unordered_map<std::string, int> node_by_name;
@@ -90,4 +94,3 @@ struct IterationMetrics {
 };
 
 }  // namespace ea
-

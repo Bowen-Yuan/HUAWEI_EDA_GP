@@ -708,9 +708,11 @@ PlaceResult global_place(Database& db, const PlaceConfig& config) {
             sharing.hpwl_orthogonal_projection = 0.0;
         }
         share_density_direction_over_nets(db, sharing, density_x, density_y);
+        const HighDegreeMode high_degree_mode = config.high_degree_mode == "exact_extrema"
+            ? HighDegreeMode::ExactExtrema : HighDegreeMode::Ignore;
         (void)hpwl_oracle.evaluate(
             hpwl_epsilon, config.active_power, config.degree_limit,
-            &wire_x, &wire_y);
+            high_degree_mode, &wire_x, &wire_y);
         project_density_direction_from_hpwl(
             db, sharing.hpwl_orthogonal_projection,
             wire_x, wire_y, density_x, density_y);
@@ -780,8 +782,12 @@ PlaceResult global_place(Database& db, const PlaceConfig& config) {
         for (int movable = 0; movable < static_cast<int>(n); ++movable) {
             const int id = db.movable_ids[movable];
             const Node& node = db.nodes[id];
+            const Real incident_weight =
+                config.preconditioner == "pin_count"
+                    ? static_cast<Real>(db.node_pin_count[id])
+                    : db.node_pin_weight_sum[id];
             const Real preconditioner = std::max<Real>(
-                1.0, db.node_pin_count[id] + effective_lambda * node.area());
+                1.0, incident_weight + effective_lambda * node.area());
             gradient[movable] =
                 (wire_x[id] + effective_lambda *
                     (density_x[id] + config.net_batch.weight * batch_x[id])) /

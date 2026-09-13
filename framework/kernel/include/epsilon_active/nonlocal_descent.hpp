@@ -34,6 +34,8 @@ struct NonlocalDescentConfig {
 struct NonlocalDescentStats {
     int objective_evaluations = 0;
     int nonzero_auxiliary_steps = 0;
+    int local_density_queries = 0;
+    int local_hpwl_queries = 0;
     Real maximum_overflow = 0.0;
 };
 
@@ -49,7 +51,12 @@ struct AuxiliaryContext {
 };
 // Callback returns a gradient-like vector.  The engine applies x <- x - delta,
 // so a desired displacement d must be encoded as g_aux = -d.
-using AuxiliaryGradient = std::function<void(
+struct AuxiliaryQueryStats {
+    int local_density_queries = 0;
+    int local_hpwl_queries = 0;
+};
+
+using AuxiliaryGradient = std::function<AuxiliaryQueryStats(
     const Database&, ExactOverlapDensity&, const AuxiliaryContext&, std::vector<Real>&,
     std::vector<Real>&)>;
 using NonlocalTelemetry = std::function<void(int, Real, const DensityMetrics&, Real,

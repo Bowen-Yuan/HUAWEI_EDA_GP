@@ -65,13 +65,15 @@ NonlocalDescentStats run_nonlocal_descent(Database& db, int bins_x, int bins_y,
         const DensityMetrics metrics = density.evaluate(0.0, 1.0, &dx, &dy);
         hpwl.evaluate(c.hpwl_epsilon * std::min(density.bin_width(), density.bin_height()),
                       4.0, 100, &wx, &wy);
-        hpwl.evaluate(0.0, 1.0, -1, nullptr, nullptr);
-        if (!initialized) { controller.initialize(db,wx,wy,dx,dy,0.0,metrics.overflow); initialized=true; }
-        else controller.update(iteration,0.0,metrics.overflow);
+        const Real exact_hpwl = hpwl.evaluate(0.0, 1.0, -1, nullptr, nullptr);
+        if (!initialized) { controller.initialize(db,wx,wy,dx,dy,exact_hpwl,metrics.overflow); initialized=true; }
+        else controller.update(iteration,exact_hpwl,metrics.overflow);
         const Real lambda=controller.effective();
         ax.assign(db.nodes.size(), 0.0); ay.assign(db.nodes.size(), 0.0);
-        AuxiliaryContext aux_context{iteration,lambda,wx,wy,dx,dy,0.0,metrics};
-        auxiliary(db, density, aux_context, ax, ay);
+        AuxiliaryContext aux_context{iteration,lambda,wx,wy,dx,dy,exact_hpwl,metrics};
+        const AuxiliaryQueryStats aux_stats = auxiliary(db, density, aux_context, ax, ay);
+        result.local_density_queries += aux_stats.local_density_queries;
+        result.local_hpwl_queries += aux_stats.local_hpwl_queries;
         Real aux_fraction=0.0; const Real aux_rms = active_rms(ax, ay, &aux_fraction);
         if (aux_rms > 1.0e-18) ++result.nonzero_auxiliary_steps;
         normalize(wx, wy); normalize(dx, dy);

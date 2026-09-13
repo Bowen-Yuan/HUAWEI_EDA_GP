@@ -6,8 +6,8 @@ namespace nsgp::modules {
 void register_density_charge_gp(ModuleRegistry& r) {
     r.add("density_charge_gp", [](StageContext& x,const Json& j) {
         const double radius_scale=j.value("radius_bin_scale",4.0);
-        return nonlocal::run(x,j,[radius_scale](const ea::Database& db,ea::ExactOverlapDensity& d,const ea::AuxiliaryContext&,
-                                                std::vector<ea::Real>& ax,std::vector<ea::Real>& ay) {
+        return nonlocal::run(x,j,"density_charge_gp",[radius_scale](const ea::Database& db,ea::ExactOverlapDensity& d,const ea::AuxiliaryContext&,
+                                                std::vector<ea::Real>& ax,std::vector<ea::Real>& ay) -> ea::AuxiliaryQueryStats {
             const int nx=d.bins_x(),ny=d.bins_y(); const auto& occ=d.occupancy();const auto cap=d.target_density()*d.bin_area();
             const auto h=std::min(d.bin_width(),d.bin_height());const auto radius=radius_scale*h;
             ax.assign(db.nodes.size(),0);ay.assign(db.nodes.size(),0);
@@ -17,6 +17,7 @@ void register_density_charge_gp(ModuleRegistry& r) {
                     const auto bx=db.xl+(xx+.5)*d.bin_width(),by=db.yl+(yy+.5)*d.bin_height();const auto dx=n.x-bx,dy=n.y-by;const auto dist=std::abs(dx)+std::abs(dy);if(dist>=radius)continue;
                     const auto q=occ[yy*nx+xx]-cap; ax[id]-=q*(dx>=0?1:-1);ay[id]-=q*(dy>=0?1:-1); }
             }
+            return {};
         });
     });
 }

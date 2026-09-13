@@ -38,6 +38,8 @@ struct Options {
     std::string run_id, save_stage;
     int threads = 1;
     bool all_cases = false;
+    bool raw_unclamped_audit = false;
+    bool pipeline_density = false;
 };
 
 void usage() {
@@ -62,6 +64,7 @@ Options parse_options(int argc, char** argv) {
         else if (arg=="--output-root") o.output_root=value();
         else if (arg=="--save-stage") o.save_stage=value();
         else if (arg=="--all-cases") o.all_cases=true;
+        else if (arg=="--raw-unclamped-audit") o.raw_unclamped_audit=true;
         else throw std::runtime_error("unknown argument: "+arg);
     }
     nsgp::configure_threads(o.threads);
@@ -170,6 +173,7 @@ void run_case(const Options& o,const std::string& case_name) {
     const auto initial=nsgp::exact_audit(db,density);
     auto last_audited=initial;
     bool retained=false;
+    int global_iteration_counter=0;
     try {
         for (std::size_t index=0; index<stages.size(); ++index) {
             const auto& stage=stages[index];
@@ -179,7 +183,7 @@ void run_case(const Options& o,const std::string& case_name) {
                 [&](int stage_iteration, const std::string& module, const Json& telemetry) {
                     Json tagged=telemetry;
                     tagged["stage_iteration"]=stage_iteration;
-                    tagged["global_iteration"]=stage_iteration;
+                    tagged["global_iteration"]=global_iteration_counter++;
                     log.record_iteration(static_cast<int>(index),module,tagged);
                 }};
             const auto stats=registry.get(stage.module)(context,stage.config);
@@ -224,11 +228,27 @@ int main(int argc,char** argv) {
             if (options.placement.empty()) throw std::runtime_error("audit requires --placement");
             ea::Database db=ea::read_bookshelf(options.dataset/options.case_name/options.case_name);
             ea::load_bookshelf_placement(db,options.placement);
-            const auto m=nsgp::exact_audit(db,{});
-            std::cout<<std::setprecision(14)<<"hpwl="<<m.hpwl
-                     <<" density_energy="<<m.density_energy
-                     <<" overflow_percent="<<m.overflow_ratio*100.0<<"%"
-                     <<" max_density="<<m.max_density<<'\n';
+            nsgp::DensityConfig audit_density;
+            if (!options.pipeline.empty()) {
+                const Json audit_pipeline=read_json(options.pipeline);
+                audit_density=density_config(audit_pipeline);
+            }
+            if (!options.raw_unclamped_audit) {
+                nsgp::clamp_movable(db);
+                const auto m=nsgp::exact_audit(db,audit_density);
+                std::cout<<std::setprecision(14)<<"hpwl="<<m.hpwl
+                         <<" density_energy="<<m.density_energy
+                         <<" overflow_percent="<<m.overflow_ratio*100.0<<"%"
+                         <<" max_density="<<m.max_density
+                         <<" audit_mode=canonical_clamped"<<'\n';
+            } else {
+                const auto m=nsgp::exact_audit(db,audit_density);
+                std::cout<<std::setprecision(14)<<"hpwl="<<m.hpwl
+                         <<" density_energy="<<m.density_energy
+                         <<" overflow_percent="<<m.overflow_ratio*100.0<<"%"
+                         <<" max_density="<<m.max_density
+                         <<" audit_mode=NONCANONICAL diagnostic"<<'\n';
+            }
             return 0;
         }
         if (options.command=="run") { run_case(options,options.case_name); return 0; }

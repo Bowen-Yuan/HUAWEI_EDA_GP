@@ -25,6 +25,7 @@ ExactHpwl::ExactHpwl(const Database& db)
     : db_(db), pin_grad_x_(db.pins.size()), pin_grad_y_(db.pins.size()) {}
 
 Real ExactHpwl::evaluate(Real epsilon, Real active_power, int degree_limit,
+                         HighDegreeMode high_degree_mode,
                          std::vector<Real>* grad_x,
                          std::vector<Real>* grad_y) {
     if (epsilon < 0.0 || active_power <= 0.0) {
@@ -52,11 +53,60 @@ Real ExactHpwl::evaluate(Real epsilon, Real active_power, int degree_limit,
             max_y = std::max(max_y, y);
         }
         total += net.weight * ((max_x - min_x) + (max_y - min_y));
-        if (!need_gradient || (degree_limit > 0 &&
-                               static_cast<int>(net.pin_count) > degree_limit)) {
+        const bool over_limit = degree_limit > 0 &&
+            static_cast<int>(net.pin_count) > degree_limit;
+        if (!need_gradient || (over_limit &&
+                               high_degree_mode == HighDegreeMode::Ignore)) {
             if (need_gradient) {
                 std::fill(pin_grad_x_.begin() + begin, pin_grad_x_.begin() + end, 0.0);
                 std::fill(pin_grad_y_.begin() + begin, pin_grad_y_.begin() + end, 0.0);
+            }
+            continue;
+        }
+
+        if (over_limit) {
+            // Exact epsilon=0 extremal-face subgradient.  Ties on the
+            // extremal face split the +/- weight evenly, matching the same
+            // tie rule used for ordinary nets at epsilon = 0.
+            Real min_x = std::numeric_limits<Real>::infinity();
+            Real max_x = -std::numeric_limits<Real>::infinity();
+            Real min_y = std::numeric_limits<Real>::infinity();
+            Real max_y = -std::numeric_limits<Real>::infinity();
+            for (std::size_t p = begin; p < end; ++p) {
+                const Pin& pin = db_.pins[p];
+                const Node& node = db_.nodes[pin.node];
+                min_x = std::min(min_x, node.x + pin.offset_x);
+                max_x = std::max(max_x, node.x + pin.offset_x);
+                min_y = std::min(min_y, node.y + pin.offset_y);
+                max_y = std::max(max_y, node.y + pin.offset_y);
+            }
+            int min_x_ties = 0, max_x_ties = 0, min_y_ties = 0, max_y_ties = 0;
+            for (std::size_t p = begin; p < end; ++p) {
+                const Pin& pin = db_.pins[p];
+                const Node& node = db_.nodes[pin.node];
+                const Real x = node.x + pin.offset_x;
+                const Real y = node.y + pin.offset_y;
+                if (x == min_x) ++min_x_ties;
+                if (x == max_x) ++max_x_ties;
+                if (y == min_y) ++min_y_ties;
+                if (y == max_y) ++max_y_ties;
+            }
+            for (std::size_t p = begin; p < end; ++p) {
+                const Pin& pin = db_.pins[p];
+                const Node& node = db_.nodes[pin.node];
+                if (node.fixed) {
+                    pin_grad_x_[p] = 0.0;
+                    pin_grad_y_[p] = 0.0;
+                    continue;
+                }
+                const Real x = node.x + pin.offset_x;
+                const Real y = node.y + pin.offset_y;
+                pin_grad_x_[p] = net.weight *
+                    ((x == max_x ? 1.0 / max_x_ties : 0.0) -
+                     (x == min_x ? 1.0 / min_x_ties : 0.0));
+                pin_grad_y_[p] = net.weight *
+                    ((y == max_y ? 1.0 / max_y_ties : 0.0) -
+                     (y == min_y ? 1.0 / min_y_ties : 0.0));
             }
             continue;
         }
@@ -137,5 +187,11 @@ Real ExactHpwl::evaluate(Real epsilon, Real active_power, int degree_limit,
     return total;
 }
 
-}  // namespace ea
+Real ExactHpwl::evaluate(Real epsilon, Real active_power, int degree_limit,
+                         std::vector<Real>* grad_x,
+                         std::vector<Real>* grad_y) {
+    return evaluate(epsilon, active_power, degree_limit,
+                    HighDegreeMode::Ignore, grad_x, grad_y);
+}
 
+}  // namespace ea

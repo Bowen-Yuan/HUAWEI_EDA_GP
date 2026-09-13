@@ -29,16 +29,30 @@ inline ea::NonlocalDescentConfig config_from_json(const Json& j) {
     if (c.maximum_delta <= 0.0) throw std::invalid_argument("optimizer.maximum_delta must be positive");
     return c;
 }
-inline StageStats run(StageContext& x, const Json& j, const ea::AuxiliaryGradient& aux) {
+inline StageStats run(StageContext& x, const Json& j, const std::string& module_name,
+                      const ea::AuxiliaryGradient& aux) {
     const auto c=config_from_json(j);
-    const auto s=ea::run_nonlocal_descent(x.db,x.density.bins_x,x.density.bins_y,x.density.target_density,c,aux,
+    ea::AuxiliaryQueryStats running_queries;
+    const auto wrapped_aux =
+        [&aux, &running_queries](const ea::Database& db, ea::ExactOverlapDensity& d,
+                                 const ea::AuxiliaryContext& ctx,
+                                 std::vector<ea::Real>& gx, std::vector<ea::Real>& gy) {
+            const ea::AuxiliaryQueryStats st = aux(db, d, ctx, gx, gy);
+            running_queries.local_density_queries += st.local_density_queries;
+            running_queries.local_hpwl_queries += st.local_hpwl_queries;
+            return st;
+        };
+    const auto s=ea::run_nonlocal_descent(x.db,x.density.bins_x,x.density.bins_y,x.density.target_density,c,wrapped_aux,
         [&](int iteration, ea::Real hpwl, const ea::DensityMetrics& d, ea::Real lambda,
             ea::Real wire_rms, ea::Real exact_rms, ea::Real aux_rms) {
-            if (x.log_iteration) x.log_iteration(iteration, "nonlocal", Json{
+            if (x.log_iteration) x.log_iteration(iteration, module_name, Json{
                 {"hpwl",hpwl},{"overflow_percent",d.overflow*100.0},{"density_energy",d.energy},
                 {"max_density",d.max_density},{"lambda",lambda},{"wire_grad_rms",wire_rms},
                 {"exact_density_grad_rms",exact_rms},{"aux_density_grad_rms",aux_rms},
-                {"objective_evaluations",4}}); });
-    return {c.iterations,c.iterations,0,s.objective_evaluations};
+                {"objective_evaluations",4},
+                {"local_density_queries",running_queries.local_density_queries},
+                {"local_hpwl_queries",running_queries.local_hpwl_queries}}); });
+    return {c.iterations,c.iterations,0,s.objective_evaluations,
+            s.local_density_queries,s.local_hpwl_queries};
 }
 }  // namespace nsgp::nonlocal

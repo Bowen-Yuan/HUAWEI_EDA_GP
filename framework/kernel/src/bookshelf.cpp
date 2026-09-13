@@ -215,6 +215,13 @@ Database read_bookshelf(const std::filesystem::path& benchmark) {
 
     std::fill(db.node_pin_count.begin(), db.node_pin_count.end(), 0);
     for (const Pin& pin : db.pins) ++db.node_pin_count[pin.node];
+    db.node_pin_weight_sum.assign(db.nodes.size(), 0.0);
+    for (const Net& net : db.nets) {
+        for (std::size_t p = net.pin_begin;
+             p < net.pin_begin + net.pin_count; ++p) {
+            db.node_pin_weight_sum[db.pins[p].node] += net.weight;
+        }
+    }
     db.node_pin_offsets.resize(db.nodes.size() + 1, 0);
     for (std::size_t i = 0; i < db.nodes.size(); ++i) {
         db.node_pin_offsets[i + 1] = db.node_pin_offsets[i] + db.node_pin_count[i];

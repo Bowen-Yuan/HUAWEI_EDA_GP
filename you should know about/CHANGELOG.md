@@ -2,6 +2,39 @@
 
 这里记录影响后续接手者判断的架构、算法、实验协议和关键数值结果。它不是 Git commit 日志的复制品。
 
+## 2026-09-14 — V8 correctness/audit repair（finite-radius、deterministic audit、CSV schema、preconditioner、high-degree）
+
+- Git：基于 6fc2068（nonsmooth-gp-v1）执行 V8 方案 Commit A；最终提交见 Git 历史。
+- Changed：`ExactOverlapDensity` 新增 `DensityAccumulationMode` 与
+  `rebuild_occupancy(mode)`；`exact_audit` 走 DeterministicCanonical（单线程固定顺序），
+  搜索路径保留 FastParallel。`ExactHpwl::evaluate` 新增 `HighDegreeMode`
+  （Ignore=历史；ExactExtrema=epsilon=0 exact extremal-face subgradient，ties 平分权重）。
+  finite-radius probe 重写为共享 `finite_radius_probe`：只接受
+  `energy_delta < -descent_tolerance` 的方向、secant 分母用 clamp 后实际位移、
+  probe 用 `evaluate_move` 增量计算且不 commit，返回 local query 统计。
+  nonlocal 引擎把 exact HPWL 传入 LambdaController 与 `AuxiliaryContext.hpwl`
+  （修复恒 0）；`AuxiliaryGradient` 回调返回 `AuxiliaryQueryStats`。
+  `StageStats` 增加 local_density_queries/local_hpwl_queries；
+  trajectory.csv 统一 19 列 schema，修复 iteration 行错位与 stage 行缺列，
+  global_iteration 跨 stage 单调，telemetry module 记录具体模块名。
+  `nsgp audit` 默认 clamp+canonical（audit_mode=canonical_clamped），
+  `--pipeline` 可读非 canonical grid，`--raw-unclamped-audit` 显式 NONCANONICAL 诊断。
+  `PlaceConfig.preconditioner`（默认 weighted_pin_sum）与
+  `PlaceConfig.high_degree_mode`；Database 新增 `node_pin_weight_sum`。
+- Tests：numeric contracts 增加 density delta/group move/deterministic audit/
+  weighted-net HPWL delta/exact-extrema/pin weight sum；nonlocal oracle contracts
+  增加 FR1–FR5、ctx.hpwl 真值契约；新增 `nsgp_experiment_log_contracts`
+  （19 列 schema、列位置、global_iteration 单调、local query 记账）。
+  四个测试目标全部通过；finite-radius 1-round 与 GP 1-round smoke 通过。
+- Numerical evidence：h221 best.pl canonical clamped audit =
+  HPWL 109,837,622.00901 / overflow 7.8193002333393%（与历史参考一致，
+  raw audit artifact 差异因此消除）。
+- Contract impact：exact HPWL/overflow 公式不变；deterministic audit 只固定累加顺序；
+  high-degree exact_extrema 是合法 non-smooth subgradient，不引入 smooth surrogate。
+- Documentation updated：05 与本文件。
+- Remaining gaps：weighted preconditioner 与 exact_extrema 的历史 replay 消融、
+  restart/BB/EC 数值实验见 V8 方案后续提交。
+
 ## 2026-09-08 — V7 H252-H257 四模块联合链：从 h221 命中 88M/7%
 
 - Git：基于 e230425（nonsmooth-gp-v1），最终提交见 Git 历史。

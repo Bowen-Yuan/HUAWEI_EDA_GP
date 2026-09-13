@@ -24,6 +24,21 @@
   契约测试 `nsgp_adaptive_lambda_contracts` 覆盖 step policy、lambda controller 合成轨迹、
   acceptance 四象限、restore 与 7×3 optimizer×step smoke。
 - 本机无 CMake 时可用 `scripts/build_manual_gcc.ps1` 手工构建（目标与 CMakeLists 一一对应）。
+- V8 修复轮（2026-09-14）：exact canonical audit 改为固定顺序单线程 deterministic
+  累加（`DensityAccumulationMode::DeterministicCanonical`），线程数不再影响可行性判定；
+  `nsgp audit` 默认 clamp 后 canonical 审计（audit_mode=canonical_clamped，可用
+  `--raw-unclamped-audit` 做显式 NONCANONICAL 诊断或 `--pipeline` 读取非 canonical grid）；
+  finite-radius oracle 只接受严格下降 probe（`descent_tolerance` 门控）、用
+  `evaluate_move` 增量 probe（不再复制整个 Database）、secant 分母使用 clamp 后实际位移，
+  probe 逻辑抽为可测试的 `finite_radius_probe`；nonlocal 引擎修复 exact HPWL 丢失
+  （ctx.hpwl 与 LambdaController 均拿到真值）；AuxiliaryGradient 返回
+  `AuxiliaryQueryStats`，trajectory.csv 19 列 schema 统一（每行列数一致），
+  stage_iteration/global_iteration 分离且跨 stage 单调，telemetry module 名为具体模块；
+  preconditioner 新默认 `weighted_pin_sum`（incident net weight 和），
+  high-degree net 新增 `exact_extrema` 方向模式（epsilon=0 exact extremal-face subgradient）；
+  Database 新增 `node_pin_weight_sum`。契约测试扩展到
+  density delta/group move/deterministic audit/weighted HPWL/extrema subgradient/FR1–FR5/
+  ctx.hpwl/CSV schema（`nsgp_experiment_log_contracts`）。
 
 当前注册模块：
 

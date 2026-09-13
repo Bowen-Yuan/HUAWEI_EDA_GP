@@ -40,6 +40,8 @@ struct StageStats {
     int accepted = 0;
     int rejected = 0;
     int objective_evaluations = 0;
+    int local_density_queries = 0;
+    int local_hpwl_queries = 0;
 };
 
 using StageFunction = std::function<StageStats(StageContext&, const Json&)>;

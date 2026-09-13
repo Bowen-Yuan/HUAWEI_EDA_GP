@@ -61,8 +61,9 @@ ctest --test-dir build -C Release --output-on-failure
 # 查看模块
 build\Release\nsgp.exe list-modules
 
-# 权威指标审计；输出 overflow_percent
+# 权威指标审计；默认 clamp 后 canonical 512×512/1.0 审计，输出 overflow_percent
 build\Release\nsgp.exe audit --case adaptec1 --placement <placement.pl>
+# 显式非 canonical 诊断：追加 --raw-unclamped-audit（输出 NONCANONICAL diagnostic）
 
 # 模块组合 pipeline；默认同样是 metrics-only
 build\Release\nsgp.exe run --case adaptec1 --pipeline framework\params\pipelines\smoke.json --threads 1

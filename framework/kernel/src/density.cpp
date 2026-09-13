@@ -268,15 +268,20 @@ void ExactOverlapDensity::commit_move(const DensityMove& move) {
     for (const auto& [bin, delta] : move.area_changes) occupancy_[bin] += delta;
 }
 
-DensityMetrics ExactOverlapDensity::evaluate(Real epsilon, Real active_power,
-                                              std::vector<Real>* grad_x,
-                                              std::vector<Real>* grad_y) {
-    if (epsilon < 0.0 || active_power <= 0.0) {
-        throw std::invalid_argument("invalid density active-set parameters");
+void ExactOverlapDensity::rebuild_occupancy(DensityAccumulationMode mode) {
+    if (mode == DensityAccumulationMode::DeterministicCanonical) {
+        occupancy_ = fixed_occupancy_;
+        // Fixed node order: db_.movable_ids order is already deterministic.
+        for (int id : db_.movable_ids) {
+            const Node& node = db_.nodes[id];
+            add_rectangle(occupancy_, node);
+        }
+        return;
     }
     occupancy_ = fixed_occupancy_;
     #pragma omp parallel for schedule(static)
-    for (int movable = 0; movable < static_cast<int>(db_.movable_ids.size()); ++movable) {
+    for (int movable = 0;
+         movable < static_cast<int>(db_.movable_ids.size()); ++movable) {
         const Node& node = db_.nodes[db_.movable_ids[movable]];
         const Real left = node.x - 0.5 * node.width;
         const Real right = node.x + 0.5 * node.width;
@@ -301,6 +306,23 @@ DensityMetrics ExactOverlapDensity::evaluate(Real epsilon, Real active_power,
             }
         }
     }
+}
+
+DensityMetrics ExactOverlapDensity::evaluate(Real epsilon, Real active_power,
+                                              std::vector<Real>* grad_x,
+                                              std::vector<Real>* grad_y) {
+    return evaluate(epsilon, active_power,
+                    DensityAccumulationMode::FastParallel, grad_x, grad_y);
+}
+
+DensityMetrics ExactOverlapDensity::evaluate(Real epsilon, Real active_power,
+                                             DensityAccumulationMode mode,
+                                             std::vector<Real>* grad_x,
+                                             std::vector<Real>* grad_y) {
+    if (epsilon < 0.0 || active_power <= 0.0) {
+        throw std::invalid_argument("invalid density active-set parameters");
+    }
+    rebuild_occupancy(mode);
 
     DensityMetrics metrics;
     Real excess_area = 0.0;

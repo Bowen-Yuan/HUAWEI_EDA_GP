@@ -69,6 +69,12 @@ struct PlaceConfig {
     int iterations = 1000;
     int threads = 0;
     int degree_limit = 100;
+    // "weighted_pin_sum" (default): P_i = max(1, sum incident net weight + lambda*A_i).
+    // "pin_count": historical P_i = max(1, pin count + lambda*A_i).
+    std::string preconditioner = "weighted_pin_sum";
+    // "ignore": historical no-direction for over-limit nets.
+    // "exact_extrema": epsilon=0 exact extremal-face subgradient.
+    std::string high_degree_mode = "ignore";
     int log_every = 10;
     Real target_density = 1.0;
     Real stop_overflow = 0.07;

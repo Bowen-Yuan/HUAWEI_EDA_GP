@@ -51,7 +51,8 @@ $kernelSources = @(
   'modules/equal_shape_swap/code/swap_recovery.cpp',
   'modules/global_capacity_transport/code/coarse_flow.cpp',
   'modules/global_capacity_transport/code/transport.cpp',
-  'modules/density_coordinate/code/density_coordinate.cpp')
+  'modules/density_coordinate/code/density_coordinate.cpp',
+  'modules/finite_radius_oracle_gp/code/finite_radius_probe.cpp')
 
 $nsgpSources = @(
   'framework/code/main.cpp',
@@ -79,7 +80,9 @@ $allSources = $kernelSources + $nsgpSources
 foreach ($source in $allSources) {
   $objectPath = Convert-ToObjectPath $source
   & $Gpp @flags -c $source -o $objectPath
-  if ($LASTEXITCODE -ne 0) { throw "compile failed: $source" }
+  if ($LASTEXITCODE -ne 0) {
+    throw "compile failed: $source"
+  }
 }
 Write-Output 'objects compiled'
 
@@ -93,4 +96,11 @@ if ($LASTEXITCODE -ne 0) { throw 'link failed: nsgp_tests' }
 $adaptiveObject = Convert-ToObjectPath 'modules/adaptive_lambda_gp/code/adaptive_lambda_gp.cpp'
 & $Gpp @flags tests/test_adaptive_lambda_contracts.cpp $adaptiveObject @kernelObjects -o build/nsgp_adaptive_tests.exe
 if ($LASTEXITCODE -ne 0) { throw 'link failed: nsgp_adaptive_tests' }
+& $Gpp @flags -Imodules/finite_radius_oracle_gp/code tests/test_nonlocal_oracle_contracts.cpp @kernelObjects -o build/nsgp_nonlocal_oracle_tests.exe
+if ($LASTEXITCODE -ne 0) { throw 'link failed: nsgp_nonlocal_oracle_tests' }
+# ExperimentLog contracts need microkernel + module adapters but not the CLI main.
+$nsgpLibrarySources = $nsgpSources | Where-Object { $_ -ne 'framework/code/main.cpp' }
+$libraryObjects = $nsgpLibrarySources | ForEach-Object { Convert-ToObjectPath $_ }
+& $Gpp @flags tests/test_experiment_log_contracts.cpp @libraryObjects @kernelObjects -o build/nsgp_experiment_log_tests.exe -ladvapi32
+if ($LASTEXITCODE -ne 0) { throw 'link failed: nsgp_experiment_log_tests' }
 Write-Output 'ALL TARGETS BUILT'

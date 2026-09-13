@@ -7,6 +7,16 @@
 
 namespace ea {
 
+// FastParallel keeps the historical atomically-accumulated occupancy and is
+// meant for search directions and non-critical telemetry.  DeterministicCanonical
+// rebuilds occupancy in a fixed single-thread order so that canonical audits,
+// feasibility decisions, and best-feasible selections do not depend on thread
+// interleaving of floating-point additions.
+enum class DensityAccumulationMode {
+    FastParallel,
+    DeterministicCanonical
+};
+
 std::vector<Real> prolongate_bin_field(
     const std::vector<Real>& source, int source_bins_x, int source_bins_y,
     int target_bins_x, int target_bins_y);
@@ -31,6 +41,10 @@ public:
     DensityMetrics evaluate(Real epsilon, Real active_power,
                             std::vector<Real>* grad_x,
                             std::vector<Real>* grad_y);
+    DensityMetrics evaluate(Real epsilon, Real active_power,
+                            DensityAccumulationMode mode,
+                            std::vector<Real>* grad_x,
+                            std::vector<Real>* grad_y);
     // Exact overlap evaluation with a bin-wise algorithmic price field. The
     // price only selects a search direction; occupancy and overflow remain
     // the unweighted exact rectangle/bin quantities.
@@ -41,6 +55,11 @@ public:
     DensityMove evaluate_group_move(
         const std::vector<DensityNodeMove>& moves) const;
     void commit_move(const DensityMove& move);
+    // Rebuilds occupancy from the current live layout using the requested
+    // accumulation order.  Exact local recovery modules must start from
+    // DeterministicCanonical so their incremental deltas sit on a
+    // reproducible baseline.
+    void rebuild_occupancy(DensityAccumulationMode mode);
 
     int bins_x() const noexcept { return bins_x_; }
     int bins_y() const noexcept { return bins_y_; }
