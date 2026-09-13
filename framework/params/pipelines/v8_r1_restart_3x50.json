@@ -1,0 +1,24 @@
+{
+  "name": "v8_r1_restart_3x50",
+  "compliance_mode": "challenge_nonsmooth",
+  "density": {
+    "bins_x": 512,
+    "bins_y": 512,
+    "target_density": 1
+  },
+  "stages": [
+    {
+      "module": "exact_joint_gp",
+      "config": "../../../modules/exact_joint_gp/params/v8_r1_stage_50.json"
+    },
+    {
+      "module": "exact_joint_gp",
+      "config": "../../../modules/exact_joint_gp/params/v8_r1_stage_50.json"
+    },
+    {
+      "module": "exact_joint_gp",
+      "config": "../../../modules/exact_joint_gp/params/v8_r1_stage_50.json"
+    }
+  ]
+}
+

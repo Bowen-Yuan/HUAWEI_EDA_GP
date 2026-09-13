@@ -1,0 +1,32 @@
+{
+  "name": "v8_v7_h221_control",
+  "compliance_mode": "challenge_nonsmooth",
+  "density": {
+    "bins_x": 512,
+    "bins_y": 512,
+    "target_density": 1
+  },
+  "stages": [
+    {
+      "module": "exact_recovery",
+      "config": "../../../modules/exact_recovery/params/v8_v7_cap15.json"
+    },
+    {
+      "module": "exact_joint_gp",
+      "config": "../../../modules/exact_joint_gp/params/v8_v7_bridge_control.json"
+    },
+    {
+      "module": "exact_joint_gp",
+      "config": "../../../modules/exact_joint_gp/params/v8_v7_retighten_control.json"
+    },
+    {
+      "module": "exact_recovery",
+      "config": "../../../modules/exact_recovery/params/v8_v7_polish4.json"
+    },
+    {
+      "module": "exact_recovery",
+      "config": "../../../modules/exact_recovery/params/v8_v7_polish4.json"
+    }
+  ]
+}
+
