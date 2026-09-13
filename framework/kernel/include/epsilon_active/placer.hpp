@@ -5,12 +5,16 @@
 #include "epsilon_active/coarse_flow.hpp"
 #include "epsilon_active/compact_recovery.hpp"
 #include "epsilon_active/density_coordinate.hpp"
+#include "epsilon_active/epsilon_continuation.hpp"
 #include "epsilon_active/lambda_controller.hpp"
 #include "epsilon_active/optimizer.hpp"
 #include "epsilon_active/recovery.hpp"
+#include "epsilon_active/spectral_step.hpp"
 #include "epsilon_active/swap_recovery.hpp"
 #include "epsilon_active/transport.hpp"
 #include "epsilon_active/types.hpp"
+
+#include <functional>
 
 #include <cstdint>
 #include <filesystem>
@@ -75,6 +79,17 @@ struct PlaceConfig {
     // "ignore": historical no-direction for over-limit nets.
     // "exact_extrema": epsilon=0 exact extremal-face subgradient.
     std::string high_degree_mode = "ignore";
+    // Optional spectral (BB) step-size adaptation.  When enabled the stage
+    // must use a moment-free optimizer (SGD); the spectral estimator owns
+    // the scalar learning rate each iteration.
+    bool spectral_step = false;
+    SpectralStepConfig spectral;
+    // Optional overflow-driven epsilon continuation of the direction oracle.
+    bool epsilon_continuation = false;
+    EpsilonContinuationConfig epsilon_schedule;
+    // Optional per-iteration telemetry hook (pipeline adapters use it for
+    // trajectory.csv rows; lab runs may leave it empty).
+    std::function<void(int, Real, Real, Real, Real)> iteration_hook;
     int log_every = 10;
     Real target_density = 1.0;
     Real stop_overflow = 0.07;

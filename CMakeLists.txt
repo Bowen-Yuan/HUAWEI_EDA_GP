@@ -54,7 +54,9 @@ target_sources(nsgp PRIVATE
   modules/density_cut_pressure_gp/code/module.cpp
   modules/density_transport_gp/code/module.cpp
   modules/density_charge_gp/code/module.cpp
-  modules/finite_radius_oracle_gp/code/module.cpp)
+  modules/finite_radius_oracle_gp/code/module.cpp
+  modules/spectral_bb_gp/code/module.cpp
+  modules/overflow_epsilon_continuation_gp/code/module.cpp)
 target_include_directories(nsgp PRIVATE modules/adaptive_lambda_gp/code)
 target_include_directories(nsgp PRIVATE modules)
 target_link_libraries(nsgp PRIVATE nsgp_numeric_kernel)
@@ -124,3 +126,7 @@ if(WIN32)
   target_link_libraries(nsgp_experiment_log_tests PRIVATE Advapi32)
 endif()
 add_test(NAME nsgp_experiment_log_contracts COMMAND nsgp_experiment_log_tests)
+
+add_executable(nsgp_dreamplace_tests tests/test_dreamplace_inspired_contracts.cpp)
+target_link_libraries(nsgp_dreamplace_tests PRIVATE nsgp_numeric_kernel)
+add_test(NAME nsgp_dreamplace_inspired_contracts COMMAND nsgp_dreamplace_tests)

@@ -1,0 +1,16 @@
+{
+  "name": "v8_bb0_sgd_control",
+  "compliance_mode": "challenge_nonsmooth",
+  "density": {
+    "bins_x": 512,
+    "bins_y": 512,
+    "target_density": 1
+  },
+  "stages": [
+    {
+      "module": "exact_joint_gp",
+      "config": "../../../modules/exact_joint_gp/params/v8_bb0_sgd_control.json"
+    }
+  ]
+}
+

@@ -72,7 +72,9 @@ $nsgpSources = @(
   'modules/density_cut_pressure_gp/code/module.cpp',
   'modules/density_transport_gp/code/module.cpp',
   'modules/density_charge_gp/code/module.cpp',
-  'modules/finite_radius_oracle_gp/code/module.cpp')
+  'modules/finite_radius_oracle_gp/code/module.cpp',
+  'modules/spectral_bb_gp/code/module.cpp',
+  'modules/overflow_epsilon_continuation_gp/code/module.cpp')
 
 New-Item -ItemType Directory -Force -Path 'build/obj' | Out-Null
 
@@ -103,4 +105,6 @@ $nsgpLibrarySources = $nsgpSources | Where-Object { $_ -ne 'framework/code/main.
 $libraryObjects = $nsgpLibrarySources | ForEach-Object { Convert-ToObjectPath $_ }
 & $Gpp @flags tests/test_experiment_log_contracts.cpp @libraryObjects @kernelObjects -o build/nsgp_experiment_log_tests.exe -ladvapi32
 if ($LASTEXITCODE -ne 0) { throw 'link failed: nsgp_experiment_log_tests' }
+& $Gpp @flags tests/test_dreamplace_inspired_contracts.cpp @kernelObjects -o build/nsgp_dreamplace_tests.exe
+if ($LASTEXITCODE -ne 0) { throw 'link failed: nsgp_dreamplace_tests' }
 Write-Output 'ALL TARGETS BUILT'

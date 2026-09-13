@@ -1,0 +1,16 @@
+{
+  "name": "v8_ec0_fixed",
+  "compliance_mode": "challenge_nonsmooth",
+  "density": {
+    "bins_x": 512,
+    "bins_y": 512,
+    "target_density": 1
+  },
+  "stages": [
+    {
+      "module": "overflow_epsilon_continuation_gp",
+      "config": "../../../modules/overflow_epsilon_continuation_gp/params/h221_ec0_fixed.json"
+    }
+  ]
+}
+

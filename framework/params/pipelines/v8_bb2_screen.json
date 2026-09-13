@@ -1,0 +1,16 @@
+{
+  "name": "v8_bb2_screen",
+  "compliance_mode": "challenge_nonsmooth",
+  "density": {
+    "bins_x": 512,
+    "bins_y": 512,
+    "target_density": 1
+  },
+  "stages": [
+    {
+      "module": "spectral_bb_gp",
+      "config": "../../../modules/spectral_bb_gp/params/h221_bb1.json"
+    }
+  ]
+}
+

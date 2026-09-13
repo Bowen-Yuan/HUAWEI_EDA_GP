@@ -225,6 +225,8 @@ ModuleRegistry make_default_registry() {
     modules::register_density_transport_gp(registry);
     modules::register_density_charge_gp(registry);
     modules::register_finite_radius_oracle_gp(registry);
+    modules::register_spectral_bb_gp(registry);
+    modules::register_overflow_epsilon_continuation_gp(registry);
     return registry;
 }
 

@@ -1,0 +1,25 @@
+{
+  "iterations": 100,
+  "hpwl_direction": { "active_power": 4.0, "degree_limit": 32 },
+  "net_batch": { "weight": 1.0, "degree_limit": 32 },
+  "preconditioner": "weighted_pin_sum",
+  "optimizer": { "name": "amsgrad", "learning_rate": 0.002, "maximum_delta": 0.25, "beta1": 0.90, "beta2": 0.99 },
+  "epsilon_continuation": {
+    "overflow_low": 0.07,
+    "overflow_high": 0.15,
+    "wire_min_bins": 4.0,
+    "wire_max_bins": 32.0,
+    "density_min_bins": 0.0,
+    "density_max_bins": 16.0,
+    "restart_on_band_change": false
+  },
+  "lambda": {
+    "policy": "trajectory",
+    "density_weight_scale": 1.0,
+    "update_interval": 2,
+    "stop_overflow": 0.07
+  },
+  "selector": { "mode": "lowest_hpwl_under_overflow_cap", "overflow_cap": 0.07 },
+  "log_every": 5
+}
+

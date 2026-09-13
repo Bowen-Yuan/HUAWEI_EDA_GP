@@ -103,6 +103,8 @@ void register_density_cut_pressure_gp(ModuleRegistry& registry);
 void register_density_transport_gp(ModuleRegistry& registry);
 void register_density_charge_gp(ModuleRegistry& registry);
 void register_finite_radius_oracle_gp(ModuleRegistry& registry);
+void register_spectral_bb_gp(ModuleRegistry& registry);
+void register_overflow_epsilon_continuation_gp(ModuleRegistry& registry);
 }
 
 ModuleRegistry make_default_registry();

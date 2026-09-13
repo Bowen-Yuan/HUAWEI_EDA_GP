@@ -55,6 +55,9 @@
   与 params/smoke.json。
 - `historical_exact_replay`：历史 exact CLI 源，保留 target 名 `nsgp_legacy_stage` 以兼容脚本。
 - `historical_dct_poisson`：独立 Bookshelf/electric/spectral/homotopy 历史 smooth 模块。
+- `spectral_bb_gp`：DREAMPlace-inspired spectral BB 步长阶段；`code/module.cpp` 与 params（h221_bb1/bb2、h221_bb1_300）。
+- `overflow_epsilon_continuation_gp`：overflow 驱动 epsilon continuation 阶段；`code/module.cpp` 与 params（h221_ec0_fixed、h221_ec1、h221_ec2 及 norestart 变体）。
+- `finite_radius_oracle_gp/code/finite_radius_probe.hpp/.cpp`：finite-radius exact secant probe 共享实现（descent 门控、evaluate_move 增量 probe、actual displacement 分母、local query 统计）。
 
 各 `results/.gitkeep` 只保留空目录，不在模块目录堆积普通实验产物。
 

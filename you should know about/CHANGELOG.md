@@ -2,6 +2,40 @@
 
 这里记录影响后续接手者判断的架构、算法、实验协议和关键数值结果。它不是 Git commit 日志的复制品。
 
+## 2026-09-14 — V8 restart 实验与 DREAMPlace-inspired 模块（spectral_bb_gp、overflow_epsilon_continuation_gp）
+
+- Git：基于 V8 Commit A（e4aecb8，nonsmooth-gp-v1）；最终提交见 Git 历史。
+- Changed：新增两个 DREAMPlace-inspired 阶段：
+  `spectral_bb_gp`（Barzilai-Borwein 步长估计，BB1/BB2 公式 + curvature 门控 +
+  clip + growth limiter + restart fallback；方向 oracle 与 exact joint GP 相同，
+  仅标量学习率自适应；要求 SGD + 无 batch acceptance）与
+  `overflow_epsilon_continuation_gp`（overflow 驱动的 epsilon-active 半径 continuation，
+  band 切换可选 optimizer reset；exact 指标不变）。
+  kernel 新增纯逻辑原语 `ea::SpectralStep`（spectral_step.hpp）与
+  `ea::EpsilonContinuation`（epsilon_continuation.hpp）；
+  `PlaceConfig` 新增 spectral_step/spectral/epsilon_continuation/iteration_hook；
+  placer GP 循环集成两者并输出每轮 lr。契约测试
+  `nsgp_dreamplace_inspired_contracts`（BB 公式/fallback/clip/growth/EC 单调/端点/band）。
+- New V8 experiments（h221 checkpoint SHA 9d0bd999…，canonical 512×512/1.0，threads=1，metrics-only）：
+  V8_REPAIRED_V7_CONTROL（cap15→bridge120→retighten180→polish×2）
+  = **90,428,943.156329 @ 6.9999992385929%**（新 baseline）；
+  R1 等预算 150：continuous **98,139,619.875507 @ 5.0737%** vs 3×50 restart
+  102,847,407.27813 @ 3.1587%（HPWL 口径 restart 负向 −4.8%，两者 feasible）；
+  R2 V7×2 = 87,477,937.531673 @ **7.4436%（infeasible）**，第二轮宏循环未能收回 feasibility；
+  BB screen 100：BB0 fixed-SGD 108,334,816.66594 @ 5.0971% vs
+  BB2-method 109,357,983.39731 @ 5.4527% vs **BB1-method 106,609,642.22966 @ 5.3065%（晋级）**；
+  BB1-method 300 = **105,122,976.93855 @ 5.1116%**；
+  EC：fixed-epsilon EC0 99,124,454.706286 @ 5.2284% 正常收敛，但
+  widening continuation（EC1 4→16 bins、EC2 4→32 bins）overflow 发散至 43–56%，
+  stage 结束回滚输入，**continuation widening 明确负向**；
+  band-change optimizer reset 在 overflow 压力震荡期反复清零 moments（EC0 上实证有害）。
+- Contract impact：exact HPWL/density 公式不变；BB 只改变标量步长；
+  EC 只改变方向 oracle 半径；两者都是 pure-descent 无 rollback。
+- Documentation updated：03、05、07 与本文件。
+- Remaining gaps：Fusion 未运行（EC 负向未满足独立正向前提）；
+  BB1-method 与 fixed-SGD 的对照在 100 步口径成立，300 步口径缺同长 fixed-SGD 对照；
+  EC 的 hysteresis band 设计未实现；单 case/单 checkpoint 局限不变。
+
 ## 2026-09-14 — V8 correctness/audit repair（finite-radius、deterministic audit、CSV schema、preconditioner、high-degree）
 
 - Git：基于 6fc2068（nonsmooth-gp-v1）执行 V8 方案 Commit A；最终提交见 Git 历史。

@@ -680,6 +680,38 @@ PlaceResult global_place(Database& db, const PlaceConfig& config) {
     }
     bool lambda_initialized = false;
     IterationMetrics last_metrics;
+    // Optional spectral step-size adaptation and epsilon continuation state.
+    std::unique_ptr<SpectralStep> spectral_step;
+    std::unique_ptr<EpsilonContinuation> epsilon_cont;
+    std::vector<Real> previous_gradient;
+    std::vector<Real> previous_applied_step;
+    Real continuation_overflow = 0.0;
+    Real min_bin_pitch = 1.0;
+    if (config.spectral_step) {
+        if (config.optimizer != OptimizerKind::SGD) {
+            throw std::invalid_argument(
+                "spectral step requires a moment-free optimizer (sgd)");
+        }
+        if (config.batch_acceptance.enabled) {
+            throw std::invalid_argument(
+                "spectral step requires unconditional pure-descent updates");
+        }
+        // The configured base rate uses the same die-relative unit as
+        // step_fraction; the BB formula needs an absolute learning rate in
+        // coordinate units.
+        SpectralStepConfig spectral_config = config.spectral;
+        spectral_config.base_learning_rate =
+            config.spectral.base_learning_rate *
+            std::min(db.xh - db.xl, db.yh - db.yl);
+        spectral_step = std::make_unique<SpectralStep>(spectral_config);
+    }
+    if (config.epsilon_continuation) {
+        epsilon_cont = std::make_unique<EpsilonContinuation>(
+            config.epsilon_schedule);
+        continuation_overflow = pre_gp_density.overflow;
+        min_bin_pitch = std::min(
+            density_oracle.bin_width(), density_oracle.bin_height());
+    }
 
     for (int iteration = 0; iteration < config.iterations; ++iteration) {
         const bool late_stage = config.late_stage.switch_iteration >= 0 &&
@@ -688,14 +720,29 @@ PlaceResult global_place(Database& db, const PlaceConfig& config) {
             ? config.late_stage.step_multiplier : 1.0;
         const Real lambda_multiplier = late_stage
             ? config.late_stage.lambda_multiplier : 1.0;
-        const Real learning_rate = base_learning_rate * step_multiplier;
+        Real learning_rate = base_learning_rate * step_multiplier;
         if (late_stage && iteration == config.late_stage.switch_iteration &&
             config.late_stage.reset_optimizer) {
             optimizer->reset(2 * db.movable_ids.size());
         }
         const Real epsilon_scale = adaptive.scale();
-        const Real hpwl_epsilon = config.hpwl_epsilon * epsilon_scale;
-        const Real density_epsilon = base_density_epsilon * epsilon_scale;
+        Real hpwl_epsilon = config.hpwl_epsilon * epsilon_scale;
+        Real density_epsilon = base_density_epsilon * epsilon_scale;
+        int continuation_band = -1;
+        bool continuation_restart = false;
+        if (epsilon_cont) {
+            const EpsilonDecision decision = epsilon_cont->observe(
+                continuation_overflow);
+            hpwl_epsilon =
+                decision.wire_epsilon_bins * min_bin_pitch * epsilon_scale;
+            density_epsilon =
+                decision.density_epsilon_bins * min_bin_pitch * epsilon_scale;
+            continuation_band = decision.band;
+            continuation_restart = decision.restart;
+            if (decision.restart) {
+                optimizer->reset(2 * db.movable_ids.size());
+            }
+        }
         const DensityMetrics density = config.regional_price.enabled
             ? density_oracle.evaluate_with_prices(
                 regional_prices, density_epsilon, config.density_active_power,
@@ -744,6 +791,9 @@ PlaceResult global_place(Database& db, const PlaceConfig& config) {
         last_metrics.epsilon_scale = epsilon_scale;
         last_metrics.learning_rate = learning_rate;
         positions = capture(db);
+        if (epsilon_cont) {
+            continuation_overflow = exact_density.overflow;
+        }
         if (exact_density.overflow < best_overflow_value) {
             best_overflow_value = exact_density.overflow;
             best_overflow = positions;
@@ -757,13 +807,6 @@ PlaceResult global_place(Database& db, const PlaceConfig& config) {
             best_feasible_iteration = iteration;
         }
         save_snapshot(db, config, iteration);
-        if (iteration % config.log_every == 0 || iteration + 1 == config.iterations) {
-            std::cout << "[GP] iter=" << iteration << " hpwl=" << exact_hpwl
-                      << " overflow=" << exact_density.overflow
-                      << " lambda=" << lambda.effective() * lambda_multiplier
-                      << " epsilon_scale=" << epsilon_scale << '\n';
-        }
-
         const Real effective_lambda = lambda.effective() * lambda_multiplier;
         if (config.regional_price.enabled &&
             (iteration + 1) % config.regional_price.update_interval == 0) {
@@ -796,6 +839,22 @@ PlaceResult global_place(Database& db, const PlaceConfig& config) {
                 (wire_y[id] + effective_lambda *
                     (density_y[id] + config.net_batch.weight * batch_y[id])) /
                 preconditioner;
+        }
+        if (spectral_step) {
+            if (!previous_applied_step.empty()) {
+                // s = x_{k-1} - x_{k-2}: the last applied displacement,
+                // stored negated.  y = g_{k-1} - g_{k-2}: the last gradient
+                // change.  Pure step-size adaptation only.
+                const std::vector<Real>& s = previous_applied_step;
+                std::vector<Real> y(2 * n);
+                for (std::size_t i = 0; i < 2 * n; ++i) {
+                    y[i] = gradient[i] - previous_gradient[i];
+                }
+                const SpectralStepDecision decision =
+                    spectral_step->update(s, y);
+                learning_rate = decision.alpha_used * step_multiplier;
+            }
+            previous_gradient = gradient;
         }
         BatchAcceptanceResult batch;
         if (iteration + 1 < config.iterations) {
@@ -846,7 +905,28 @@ PlaceResult global_place(Database& db, const PlaceConfig& config) {
                     << batch.trials << ','
                     << ((!batch.accepted && batch.trials > 0) ? 1 : 0) << '\n';
         }
+        if (spectral_step) {
+            // Pure-descent path: applied displacement = -delta.  Store it
+            // as the next iteration's s = x_{k} - x_{k-1}.
+            previous_applied_step.resize(delta.size());
+            for (std::size_t i = 0; i < delta.size(); ++i) {
+                previous_applied_step[i] = -delta[i];
+            }
+        }
         adaptive.observe(iteration, exact_hpwl, exact_density.overflow);
+        if (iteration % config.log_every == 0 || iteration + 1 == config.iterations) {
+            std::cout << "[GP] iter=" << iteration << " hpwl=" << exact_hpwl
+                      << " overflow=" << exact_density.overflow
+                      << " lambda=" << lambda.effective() * lambda_multiplier
+                      << " lr=" << learning_rate
+                      << " epsilon_scale=" << epsilon_scale << '\n';
+        }
+        if (config.iteration_hook) {
+            config.iteration_hook(iteration, exact_hpwl,
+                                  exact_density.overflow,
+                                  lambda.effective() * lambda_multiplier,
+                                  learning_rate);
+        }
     }
 
     // A staged experiment may continue only from a checkpoint produced by

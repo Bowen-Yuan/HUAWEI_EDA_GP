@@ -151,6 +151,25 @@ raw Bookshelf .pl
 
 这些能力已经进入 `ModuleRegistry`，可直接写入 pipeline。新模块同样必须新增清晰参数文件和调用链记录，不要只增加难以发现的 CLI flag。
 
+## DREAMPlace-inspired stages（2026-09-14）
+
+两个迁移 DREAMPlace 思想但保持 exact non-smooth 协议的 pure-descent 阶段：
+
+- `spectral_bb_gp`：Barzilai-Borwein/spectral 步长估计。方向 oracle 与 exact joint GP 完全一致
+  （exact epsilon-active HPWL + exact density + weighted pin-sum preconditioner + trajectory lambda），
+  仅标量学习率由 `ea::SpectralStep`（BB1/BB2 + curvature 门控 + clip + growth limiter）自适应；
+  要求 SGD 与无 batch acceptance；fallback/restart 只重置步长估计器，不回滚布局。
+  代码：`modules/spectral_bb_gp/code/module.cpp`；参数：`h221_bb2.json`、`h221_bb1.json`、`h221_bb1_300.json`。
+- `overflow_epsilon_continuation_gp`：overflow 驱动的 epsilon-active 半径 continuation。
+  `ea::EpsilonContinuation` 按当前 exact overflow 在 [wire/density min,max] bins 间 smoothstep 插值，
+  band（narrow/medium/wide）切换可选重置 optimizer（不回滚布局）。exact 指标与最终审计永远 epsilon=0。
+  代码：`modules/overflow_epsilon_continuation_gp/code/module.cpp`；
+  参数：`h221_ec0_fixed.json`（fixed 对照）、`h221_ec1.json`、`h221_ec2.json` 及 norestart 变体。
+
+两者的 placer 集成在 `modules/exact_joint_gp/code/placer.cpp`（PlaceConfig.spectral_step /
+PlaceConfig.epsilon_continuation / PlaceConfig.iteration_hook）；契约测试
+`tests/test_dreamplace_inspired_contracts.cpp`（CTest：`nsgp_dreamplace_inspired_contracts`）。
+
 ## `historical_dct_poisson`
 
 - 代码：`modules/historical_dct_poisson/code`。
