@@ -1,0 +1,72 @@
+project: epsilon-active
+question: Can exact nonsmooth HPWL plus exact grid-overlap density meet the ISPD2005 a1-a4 quality and runtime targets?
+status: inner_loop
+locked_constraints:
+  - exact max-minus-min HPWL only
+  - exact rectangle-to-bin overlap density only
+  - fixed macros consume bin capacity
+  - no objective smoothing or smooth warm start
+  - global placement only; no legalization or legality checks
+  - at most 40 CPU threads
+benchmarks: [adaptec1, adaptec2, adaptec3, adaptec4]
+paper_hpwl_m:
+  adaptec1: 73.22
+  adaptec2: 82.22
+  adaptec3: 193.72
+  adaptec4: 174.08
+paper_gp_seconds_40_threads:
+  adaptec1: 67
+  adaptec2: 98
+  adaptec3: 133
+  adaptec4: 187
+acceptance:
+  hpwl_degradation_max_percent: 1.0
+  overflow_max: 0.07
+  iteration_max: 5000
+  runtime_ratio_max: 2.0
+current_best_strict_a1:
+  experiment: H375
+  hpwl_m: 85.999300
+  exact_overflow: 0.069999900
+  runtime_seconds: 103.0
+current_best_quality_a1:
+  experiment: H375
+  hpwl_m: 85.999300
+  exact_overflow: 0.069999900
+  incremental_runtime_seconds: 37.63
+  end_to_end_runtime_seconds: 103.0
+  runtime_gate_valid: true
+current_best_strict_a2:
+  experiment: H165
+  hpwl_m: 134.965000
+  exact_overflow: 0.069900000
+  runtime_seconds: 32.93
+current_best_strict_a4:
+  experiment: H171
+  hpwl_m: 436.288000
+  exact_overflow: 0.069899900
+  runtime_seconds: 47.56
+current_hypothesis: H337 feasible-topology bisection plus net-block exact recovery is the strongest route; H367 reaches 105.295M/6.99976% within staged a1 runtime, while partial interpolation cannot cross the 7% capacity basin
+next_action: design and test topology-preserving hierarchical capacity cuts that move only cut-boundary surplus while retaining net-relative geometry; defer a2-a4 transfer until a1 improves materially
+latest_exploration:
+  experiment: H351
+  hpwl_guarded_axis_flow:
+    input_h257_hpwl_m: 87.119465
+    final_hpwl_m: 87.1195
+    exact_overflow: 0.0699966
+    runtime_seconds: 0.589148
+    commodity_moves: 12
+  interpretation: non-positive exact HPWL guard preserves topology but blocks useful density transfer; joint assignment is next
+current_h186_branch:
+  experiment: H257
+  hpwl_m: 87.119465
+  exact_overflow: 0.069999578
+  staged_runtime_seconds: 133.77
+  staged_iterations: 1687
+last_completed_experiment:
+  experiment: H405-H410
+  status: completed_isolated_zero_gradient_ablation_a1
+  results_csv: experiments/isolated_zero_gradient_summary.csv
+  plot: experiments/isolated_zero_gradient_ablation.pdf
+  reason: all six mechanisms were tested one at a time from the same raw center seed; breakpoint and net-share improve HPWL, finite oracle improves overflow slightly, but none establishes capacity from the raw basin
+next_action: retain breakpoint/net-share only as recovery operators and design a staged exact capacity bridge; do not claim combined H404 as an isolated result

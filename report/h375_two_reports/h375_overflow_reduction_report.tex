@@ -1,0 +1,242 @@
+\documentclass[UTF8,11pt,a4paper]{ctexart}
+
+\usepackage[a4paper,margin=2.15cm]{geometry}
+\usepackage{amsmath,amssymb,bm,booktabs,tabularx,array,graphicx,float}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{hyperref}
+
+\graphicspath{{figures/}}
+\setlength{\parindent}{2em}
+\setlength{\parskip}{0.25em}
+\setlength{\emergencystretch}{2em}
+\captionsetup{font=small,labelfont=bf}
+\hypersetup{unicode=true,colorlinks=true,linkcolor=blue,urlcolor=blue,pdftitle={H375 overflow reduction report}}
+
+\newcommand{\HPWL}{\operatorname{HPWL}}
+\newcommand{\mov}{\mathcal{M}}
+\newcommand{\fix}{\mathcal{F}}
+\newcommand{\bins}{\mathcal{B}}
+\newcommand{\R}{\mathcal{R}}
+\newcommand{\clip}[1]{\left[#1\right]_+}
+
+\title{H375 前半链：从 fresh 初始化到约 7\% overflow\\
+\large Overflow 下降机制与阶段审计}
+\author{epsilon-active 非光滑布局实验记录}
+\date{2026 年 8 月}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本报告只分析 H375 完整链条的前半部分：fresh raw 初始化、H219 HPWL seed、H219 的
+128$\times$128 粗网格同伦和 H221 的 512$\times$512 细网格 selector。目标是解释
+overflow 如何由 $99.966\%$ 降到 $7.751547\%$。前向评价始终使用精确的 max--min
+HPWL 和精确矩形--bin overlap；固定宏直接扣除可移动容量。需要明确的是，H219/H221
+早期正 $\mu$ 分支使用了 DCT/Poisson 静电辅助，因此本报告记录的是“静电辅助的全局
+spread + 精确 overlap 审计”，而不是从 raw 开始全程纯 exact-overlap 的结果。
+\end{abstract}
+
+\section{问题、变量与审计口径}
+
+设放置区域为 $\R=[x_l,x_h]\times[y_l,y_h]$，可移动单元集合为 $\mov$，固定宏集合为
+$\fix$。单元 $i$ 的中心坐标和尺寸为 $(x_i,y_i)$ 与 $(w_i,h_i)$，其矩形为
+\[
+ R_i=[x_i-\tfrac12w_i,x_i+\tfrac12w_i]
+     \times[y_i-\tfrac12h_i,y_i+\tfrac12h_i].
+\]
+对 net $e$ 的 pin $p$，含 Bookshelf offset 的 pin 坐标为
+$(X_p,Y_p)=(x_{i(p)}+\Delta x_p,y_{i(p)}+\Delta y_p)$，精确 HPWL 定义为
+\begin{equation}
+ W(x,y)=\sum_{e}w_e\left(\max_{p\in e}X_p-\min_{p\in e}X_p
+                         +\max_{p\in e}Y_p-\min_{p\in e}Y_p\right).
+ \label{eq:hpwl}
+\end{equation}
+
+将区域划分为矩形 bin $B_b$。单元与 bin 的精确交叠面积为
+\begin{align}
+ \ell^x_{ib}&=\clip{\min(x_i+\tfrac12w_i,b_x^+)-\max(x_i-\tfrac12w_i,b_x^-)},\\
+ \ell^y_{ib}&=\clip{\min(y_i+\tfrac12h_i,b_y^+)-\max(y_i-\tfrac12h_i,b_y^-)},
+ &a_{ib}&=\ell^x_{ib}\ell^y_{ib}.
+ \label{eq:overlap}
+\end{align}
+固定宏先写入 immutable occupancy map：
+\begin{equation}
+ u_b=u_b^{\rm fix}+\sum_{i\in\mov}a_{ib},\qquad
+ C_b^{\rm mov}=\clip{\rho_t A_b-u_b^{\rm fix}}.
+ \label{eq:capacity}
+\end{equation}
+因此宏器件占用会在每个相交 bin 中减少 movable capacity，而不是通过软障碍近似。
+本文记录的 exact overflow 为
+\begin{equation}
+ O(x,y)=\frac{\sum_b\clip{u_b-\rho_t A_b}}{A_{\rm mov}},
+ \qquad A_{\rm mov}=\sum_{i\in\mov}w_ih_i.
+ \label{eq:overflow}
+\end{equation}
+
+\section{阶段 0：fresh raw 初始化}
+
+每次实验从原始 \texttt{.pl} 重新读取坐标，不读取历史 \texttt{.eplace*.pl} 或
+\texttt{.lg.pl}。H375 使用
+中心 Gaussian 初始化：
+\begin{equation}
+ x_i=\frac{x_l+x_h}{2}+10^{-3}(x_h-x_l)\xi_i^x,
+ \qquad
+ y_i=\frac{y_l+y_h}{2}+10^{-3}(y_h-y_l)\xi_i^y,
+ \quad \xi_i^x,\xi_i^y\sim\mathcal{N}(0,1),
+ \label{eq:init}
+\end{equation}
+并在放置区域内截断。节点集中在中心使 movable rectangles 大量覆盖相同 bin，故初始
+overflow 很高。精确审计为
+\[
+ W=53.214813\ {\rm M},\qquad O=99.966213\%.
+\]
+这里的目标不是立即满足容量，而是得到可复现、与论文初始化思想一致的 raw 起点。
+
+\section{阶段 1：H219 HPWL-only seed}
+
+\subsection{方向计算}
+这一阶段将 density scale 设为零，只优化式 \eqref{eq:hpwl}。为避免普通 max/min 只
+给唯一极值 pin 方向，对接近极值的 pin 使用 epsilon-active 权重。以 $x$ 最大端为例，
+\begin{equation}
+ a_{p,x}^{\max}=\clip{1-\frac{x_e^{\max}-X_p}{\varepsilon}}^q,
+ \qquad
+ g_{p,x}^{(e)}=w_e\left(
+ \frac{a_{p,x}^{\max}}{\sum_{r\in e}a_{r,x}^{\max}}-
+ \frac{a_{p,x}^{\min}}{\sum_{r\in e}a_{r,x}^{\min}}\right),
+ \label{eq:epsactive}
+\end{equation}
+其中 $y$ 方向同理。H219--H257 使用 $\varepsilon=125,q=4$；epsilon 只选择
+active 片段，不改变 max--min 前向值。
+
+\subsection{优化更新与结果}
+令 $z=(x_1,\ldots,x_{|\mov|},y_1,\ldots,y_{|\mov|})$，Adam 更新写为
+\begin{align}
+ m_k&=\beta_1m_{k-1}+(1-\beta_1)g_k,\quad
+ v_k=\beta_2v_{k-1}+(1-\beta_2)g_k^2,\\
+ z_{k+1}&=z_k-\eta\,\widehat m_k/(\sqrt{\widehat v_k}+\epsilon_{\rm opt}).
+ \label{eq:adam}
+\end{align}
+由于 density scale 为零，overflow 只被记录，不参与坐标更新。200 次更新后：
+\begin{equation}
+ 53.214813\ {\rm M}\longrightarrow43.034762\ {\rm M},
+ \qquad
+ 99.966213\%\longrightarrow96.056285\%.
+ \label{eq:seedresult}
+\end{equation}
+HPWL-only seed 的作用是先收紧同一 net 的相对拓扑；它不能消除中心拥挤，这也是后续
+需要全局容量驱动力的原因。
+
+\section{阶段 2：H219 粗网格正 \texorpdfstring{$\mu$}{mu} 同伦}
+
+\subsection{长程容量驱动力}
+H219 从 seed 继承坐标，在 128$\times$128 网格上运行 24 个 50-step stage。除了精确
+矩形 overlap 外，历史程序还引入 DCT/Poisson 静电辅助：
+\begin{equation}
+ -\nabla^2\phi=\rho,\qquad
+ E_{\rm el}=\frac12\int_{\R}\rho\phi\,\mathrm dA,\qquad
+ \bm E=-\nabla\phi.
+ \label{eq:electro}
+\end{equation}
+其归一化阶段目标可记为
+\begin{equation}
+ F_{\mu,\lambda}=\frac{W}{W_0}
+ +\lambda\frac{E_{\rm ex}}{E_0}
+ +\mu\left(\frac{E_{\rm el}}{E_{{\rm el},0}}+E_{\rm anchor}\right),
+ \qquad
+ E_{\rm ex}=\frac12\sum_b\frac{\clip{u_b-\rho_tA_b}^2}{A_b}.
+ \label{eq:coarseobjective}
+\end{equation}
+其中 $\mu$ 从正值按 $\mu_{k+1}=0.99\mu_k$ 衰减，DCT/IDCT 与 DST/IDST 给出跨 bin
+的长程方向；精确 overlap 仍用于每个 checkpoint 的审计。H219 的物理参数包括
+overlap scale $0.00674558$、electrostatic scale $0.443690$、lambda step $15$、
+lambda control 上限 $150$ 和 anchor weight $10^{-4}$。
+
+\subsection{为什么 overflow 下降}
+粗网格起点的 exact 审计为 $43.034762$ M / $94.7725\%$。静电场在中心高密度区域
+产生跨 bin 的排斥方向，使大量单元同时向外 spread，而不是等待单个矩形跨越一个
+breakpoint。到 row 1100 时：
+\begin{equation}
+ 43.034762\ {\rm M}/94.7725\%
+ \longrightarrow60.617468\ {\rm M}/71.707837\%.
+ \label{eq:coarseresult}
+\end{equation}
+HPWL 上升是 spread 的代价；这一阶段降低 overflow 的关键是正 $\mu$ 的长程全局场，
+而不是 HPWL 次梯度或一个局部搬运规则。row 1100 被选作细网格 handoff，避免把末端
+状态直接交给下一阶段。
+
+\section{阶段 3：H221 细网格 selector}
+
+\subsection{分辨率切换与控制量}
+H221 读取 H219 row 1100，重新在 512$\times$512 网格建立 fixed-macro occupancy，
+并逐矩形重算式 \eqref{eq:overlap}--\eqref{eq:overflow}。由于 bin 变细，坐标不变而
+metric 变了：row 0 为 $60.618692$ M / $77.650357\%$。H221 使用
+electrostatic gradient scale $0.0979419$、overlap scale $0.000925412$、lambda
+step $520$、lambda maximum $1950$、anchor weight $10^{-5}$；iteration 0--59
+保持 $\lambda=0$，随后由 adaptive controller 激活。
+
+自适应控制的尺度校准为
+\begin{equation}
+ \lambda_0=s_\lambda\frac{\lVert g_W\rVert_1}
+ {\max(\lVert g_E\rVert_1,10^{-30})},\qquad \lambda_k=\lambda_0c_k,
+ \label{eq:lambdascale}
+\end{equation}
+并根据相邻 HPWL 变化调整 $c_k$。正 $\mu$ 的 fine branch 继续提供全局 spread，
+lambda 则逐步接管容量压力。
+
+\subsection{selector 的选择}
+在 positive-$\mu$ 分支中，row 182 达到最低 exact overflow：
+\begin{equation}
+ W_{182}=109.425511\ {\rm M},\qquad O_{182}=7.751547\%.
+ \label{eq:fineresult}
+\end{equation}
+继续迭代会让 HPWL 降低但 overflow 回升，因此不选末端状态，而恢复 row 182 作为后续
+exact recovery 的输入。这里的 $7.751547\%$ 是“约 7\%”的 selector checkpoint，
+不是最终严格 $O\le7\%$ 的证明；严格 7\% 收紧属于 H252 之后的另一份报告。
+
+\section{结果总表与收敛曲线}
+
+\begin{table}[H]
+\centering
+\caption{从 fresh 初始化到 H221 selector 的精确 checkpoint。}
+\label{tab:overflowtrajectory}
+\small
+\begin{tabularx}{\textwidth}{l l r r X}
+\toprule
+阶段 & checkpoint & HPWL (M) & overflow (\%) & 核心作用\\
+\midrule
+初始化 & raw fresh & 53.214813 & 99.966213 & 中心 Gaussian raw 起点\\
+H219 & HPWL seed & 43.034762 & 96.056285 & epsilon-active HPWL，density scale=0\\
+H219 & coarse row 1100 & 60.617468 & 71.707837 & 128 网格正 $\mu$ 长程 spread\\
+H221 & fine row 0 & 60.618692 & 77.650357 & 512 网格重算 exact occupancy\\
+H221 & selector row 182 & 109.425511 & 7.751547 & positive-$\mu$ 最低 overflow checkpoint\\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.99\textwidth]{overflow_reduction_curve.pdf}
+\caption{H375 前半链收敛曲线。上图为 exact HPWL，下图为 exact overflow；色带表示
+fresh/seed、H219 coarse 和 H221 fine 阶段，虚线分别为 DREAMPlace HPWL 参考线和
+7\% overflow 目标。曲线只连接已记录的 checkpoint，不代表对非光滑目标进行了平滑。}
+\label{fig:overflowcurve}
+\end{figure}
+
+\section{结论：真正使 overflow 下降的三步}
+
+\begin{enumerate}[leftmargin=2.1em,itemsep=0.15em]
+  \item \textbf{HPWL seed 只修复拓扑，不负责容量。} epsilon-active 次梯度把同一 net
+        的 pin 拉近，HPWL 从 $53.21$ M 降到 $43.03$ M，但 overflow 仍约 $96\%$。
+  \item \textbf{128 网格正 $\mu$ 同伦提供第一次全局 spread。} DCT/Poisson 场跨越大量
+        bin 传递方向，overflow 从约 $94.77\%$ 降至 $71.71\%$；代价是 HPWL 上升。
+  \item \textbf{512 网格正 $\mu$ 分支把 spread 推到细粒度容量边界。} 重新计算 fixed-
+        macro exact occupancy，并在 row 182 选择最低 overflow checkpoint，得到
+        $7.751547\%$，再交给后续 exact retightening。
+\end{enumerate}
+
+本报告的边界是：H219/H221 的早期正 $\mu$ 确实为静电辅助；H252 之后才完全关闭静电并
+使用 exact 非光滑尾部。因此不能把本报告的前半链描述为全程纯 exact-overlap 优化。
+
+\end{document}

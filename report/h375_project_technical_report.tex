@@ -1,0 +1,616 @@
+% H375 project technical report -- Chinese mechanism-focused revision.
+\documentclass[UTF8,a4paper,11pt]{ctexrep}
+\usepackage[a4paper,margin=2.2cm,headheight=15pt]{geometry}
+\usepackage{amsmath,amssymb,bm,booktabs,longtable,tabularx,array,graphicx,float,xcolor}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage{caption}
+\hypersetup{colorlinks=true,linkcolor=blue!55!black,urlcolor=blue!55!black,
+  pdftitle={epsilon-active 项目实验过程与 H375 求解流程技术报告}}
+\graphicspath{{h375/figures/}}
+\setlength{\parindent}{2em}
+\setlength{\parskip}{0.30em}
+\setlength{\emergencystretch}{3em}
+\renewcommand{\arraystretch}{1.18}
+\pagestyle{fancy}\fancyhf{}
+\fancyhead[L]{epsilon-active 实验过程与 H375}
+\fancyhead[R]{技术报告}
+\fancyfoot[C]{\thepage}
+\newcommand{\Overflow}{\operatorname{Overflow}}
+\newcommand{\Mcal}{\mathcal{M}}
+\newcommand{\Bcal}{\mathcal{B}}
+\newcommand{\Ecal}{\mathcal{E}}
+
+\title{epsilon-active 项目实验过程与 H375 求解流程\\
+\large 从超容量率下降到精确半周长线长恢复}
+\author{Huawei EDA Challenge 5 -- Global Placement}
+\date{2026 年 8 月 31 日}
+
+\begin{document}
+\maketitle
+\begin{abstract}
+本文用“难点--动机--方法”的顺序解释 H375 的完整求解过程。整个过程分成两个阶段：第一阶段从中心高斯初始布局出发，把超容量率降到可接受范围；第二阶段在超容量率上限内恢复半周长线长（HPWL）。核心困难不是密度权重太小，而是精确矩形交叠面积关于坐标是分段线性的：许多单元处在分段内部时，密度梯度恰为零，普通局部梯度无法告诉它应该跨越哪个网格边界。
+
+H375 通过三类互补机制解决这个问题：H219/H221 的静电同伦用泊松方程产生全局长程方向；H252--H372 用网格边界折点、节点组移动和分层容量分配直接跨过零梯度区，并用精确前向值审核；H375 最后只交换等宽等高单元，在不改变任何网格占用的情况下继续降低精确 HPWL。adaptec1 的归档最优结果为 85.999318M HPWL、6.999990\% 超容量率。报告还给出 adaptec1--4 的固定参数重放结果、运行时间以及若干候选方案的机制比较。
+\end{abstract}
+\tableofcontents
+
+\chapter{问题模型、梯度与两阶段总述}
+\section{两个评价量}
+设可移动单元集合为 $\Mcal$，网集合为 $\Ecal$，网格集合为 $\Bcal$。引脚 $p$ 的真实坐标包含相对单元中心的偏移：
+\begin{equation}
+ X_p=x_{n(p)}+\Delta x_p,\qquad Y_p=y_{n(p)}+\Delta y_p.
+ \label{eq:pin}
+\end{equation}
+网 $e$ 的半周长线长以及总线长为
+\begin{align}
+ W_e&=w_e\left(X_e^{\max}-X_e^{\min}+Y_e^{\max}-Y_e^{\min}\right),\\
+ W&=\sum_{e\in\Ecal}W_e. \label{eq:hpwl}
+\end{align}
+这里报告中的 $W$ 始终按最大值减最小值精确计算，不使用指数或对数近似。
+
+对单元 $i$ 与网格 $b=[b_x^-,b_x^+]\times[b_y^-,b_y^+]$，定义一维交叠长度和交叠面积
+\begin{align}
+ \ell^x_{ib}&=\left[\min(x_i+\tfrac12w_i,b_x^+)
+ -\max(x_i-\tfrac12w_i,b_x^-)\right]_+,\\
+ \ell^y_{ib}&=\left[\min(y_i+\tfrac12h_i,b_y^+)
+ -\max(y_i-\tfrac12h_i,b_y^-)\right]_+,\qquad
+ a_{ib}=\ell^x_{ib}\ell^y_{ib}. \label{eq:overlaparea}
+\end{align}
+固定宏的占用先加入 $u_b^{\rm fix}$，然后再累加可移动单元：
+\begin{equation}
+ u_b=u_b^{\rm fix}+\sum_{i\in\Mcal}a_{ib},\qquad
+ s_b=[u_b-\rho_tA_b]_+. \label{eq:occupancy}
+\end{equation}
+其中 $A_b$ 是网格面积，$s_b$ 是超出容量的面积。本项目用平方超容量能量产生方向，用总超容量率审核结果：
+\begin{equation}
+ D=\frac12\sum_{b\in\Bcal}\frac{s_b^2}{A_b},\qquad
+ \Overflow=\frac{\sum_bs_b}{\sum_{i\in\Mcal}w_ih_i}. \label{eq:density}
+\end{equation}
+
+\section{HPWL 梯度怎样计算}
+最大值和最小值在极值身份切换处不可微，但存在次梯度。若 $m_e^{x,+}$ 个引脚共同达到 $X_e^{\max}$，$m_e^{x,-}$ 个引脚共同达到 $X_e^{\min}$，一种精确次梯度选择是
+\begin{equation}
+ \frac{\partial W_e}{\partial X_p}=w_e\left(
+ \frac{\mathbf 1[X_p=X_e^{\max}]}{m_e^{x,+}}-
+ \frac{\mathbf 1[X_p=X_e^{\min}]}{m_e^{x,-}}\right). \label{eq:hpwlsubgrad}
+\end{equation}
+$y$ 方向同理；一个单元的梯度等于其所有引脚、所有关联网贡献之和：
+\begin{equation}
+ g^W_{i,x}=\sum_{p:n(p)=i}\sum_{e:p\in e}\frac{\partial W_e}{\partial X_p},
+ \qquad g^W_{i,y}=\sum_{p:n(p)=i}\sum_{e:p\in e}\frac{\partial W_e}{\partial Y_p}. \label{eq:nodehpwlgrad}
+\end{equation}
+
+为减少“只有最外侧一个引脚受力”以及极值身份频繁切换，代码把距离极值不超过 $\epsilon$ 的引脚也纳入方向分配。以 $x$ 最大端为例：
+\begin{equation}
+ q^{x,+}_{p}=\left[1-\frac{X_e^{\max}-X_p}{\epsilon}\right]_+^r,
+ \quad q^{x,-}_{p}=\left[1-\frac{X_p-X_e^{\min}}{\epsilon}\right]_+^r,
+ \quad
+ \widetilde g^W_{p,x}=w_e\left(
+ \frac{q^{x,+}_p}{\sum_jq^{x,+}_j}-\frac{q^{x,-}_p}{\sum_jq^{x,-}_j}\right). \label{eq:epsilonactive}
+\end{equation}
+H252 之后通常取 $\epsilon=125$ 或 $85$、$r=4$。这只是为精确 HPWL 选择较稳定的搜索方向；式~\eqref{eq:hpwl} 的前向评价没有被改写。
+
+\section{密度梯度怎样计算，以及为何大量为零}
+在当前分段内，横向交叠长度的导数为
+\begin{equation}
+ \frac{\partial\ell^x_{ib}}{\partial x_i}=
+ \mathbf 1[x_i+\tfrac12w_i<b_x^+]-
+ \mathbf 1[x_i-\tfrac12w_i>b_x^-], \label{eq:intervalgrad}
+\end{equation}
+无交叠时导数为零，恰好位于折点时实现取相邻分段的中间值。因此
+\begin{equation}
+ \frac{\partial a_{ib}}{\partial x_i}
+ =\frac{\partial\ell^x_{ib}}{\partial x_i}\ell^y_{ib},\qquad
+ g^D_{i,x}=\frac{\partial D}{\partial x_i}
+ =\sum_{b\in\Bcal}\frac{s_b}{A_b}
+ \frac{\partial a_{ib}}{\partial x_i}, \label{eq:densitygrad}
+\end{equation}
+$y$ 方向完全相同。
+
+式~\eqref{eq:intervalgrad} 直接说明了零梯度困局。如果一个小单元完整位于某网格内部，两个示性函数都等于 1，二者相减为 0；如果一个大单元完整覆盖某网格，两个示性函数都等于 0，导数仍为 0。只有单元边缘切过网格边缘时，该网格才产生非零密度梯度。进一步地，若单元从一个过载网格移入另一个过载网格，总超容量率也可能暂时不降。故单纯增大 $D$ 的权重只能放大已有非零梯度，无法在零梯度处凭空产生移动方向。
+
+\section{静电项为何能提供长程方向}
+把网格超密度视作电荷 $\rho$，离散泊松方程写成
+\begin{equation}
+ L\bm\phi=\bm\rho,\qquad
+ E_{\rm el}=\frac12\bm\rho^{\mathsf T}\bm\phi,
+ \qquad \bm E=-\nabla\phi. \label{eq:poisson}
+\end{equation}
+$L$ 是带 Neumann 边界的离散拉普拉斯算子，代码用 DCT 频域求解。若单元位置 $z_i=(x_i,y_i)$ 对电荷沉积的雅可比为 $J_i=\partial\bm\rho/\partial z_i$，则
+\begin{equation}
+ \nabla_{z_i}E_{\rm el}=J_i^{\mathsf T}\bm\phi. \label{eq:electrograd}
+\end{equation}
+它等价于把全局电场插值回单元位置。与式~\eqref{eq:densitygrad} 不同，远处过载也会改变当前位置的电势，所以即使单元没有切过网格边界，仍可得到非零长程方向。这正是静电同伦破解零梯度平台的关键。
+
+H219/H221 的归一化更新梯度为
+\begin{equation}
+ \bm g=\frac{\bm g^W}{W_0}
+ +\lambda\frac{\bm g^D}{D_0}
+ +\mu\left(\frac{\bm g^{\rm el}}{E_0}+\bm g^{\rm anchor}\right), \label{eq:totalgrad}
+\end{equation}
+其中锚定项防止泊松方程的整体平移零模。初始时还用
+\begin{equation}
+ c_D=\frac{\|\bm g^W/W_0\|_2}{\|\bm g^D/D_0\|_2},\qquad
+ c_E=\frac{\|\bm g^W/W_0\|_2}{\|\bm g^{\rm el}/E_0\|_2} \label{eq:gradbalance}
+\end{equation}
+校准三类梯度的数量级。随后 $\mu$ 分阶段降到 0，$\lambda$ 在接近容量目标时增大，使辅助电场最终退出，精确交叠约束接管。
+
+连续阶段使用 Adam。对第 $k$ 次梯度 $\bm g_k$，
+\begin{align}
+ \bm m_k&=\beta_1\bm m_{k-1}+(1-\beta_1)\bm g_k,\qquad
+ \bm v_k=\beta_2\bm v_{k-1}+(1-\beta_2)\bm g_k^{\odot2},\\
+ \bm z_{k+1}&=\Pi_{\mathcal R}\left(\bm z_k-
+ \eta_k\frac{\bm m_k/(1-\beta_1^k)}
+ {\sqrt{\bm v_k/(1-\beta_2^k)}+\delta}\right). \label{eq:adam}
+\end{align}
+$\Pi_{\mathcal R}$ 把单元中心限制在版图边界内。
+
+\section{两阶段分解与 H375 链条}
+第一阶段解决“怎样跨过零梯度区并把单元铺开”；第二阶段解决“怎样在 $\Overflow\leq7\%$ 时收回线长”。完整坐标继承链为
+\begin{center}
+\begin{tikzpicture}[node distance=0.36cm and 0.42cm, every node/.style={draw,rounded corners=2pt,align=center,font=\scriptsize,minimum height=0.82cm,text width=2.48cm}, arr/.style={-{Latex[length=1.6mm]},line width=.55pt}]
+\node[fill=blue!8] (r) {中心高斯\\初始布局};
+\node[fill=blue!8,right=of r] (s) {H219\\仅优化线长};
+\node[fill=purple!10,right=of s] (c) {H219\\128 网格静电扩散};
+\node[fill=purple!10,right=of c] (f) {H221\\512 网格精细扩散};
+\node[fill=orange!12,below=of r] (a) {H252--H257\\放宽、收紧与精确恢复};
+\node[fill=green!10,right=of a] (b) {H372\\仅搬运超额容量};
+\node[fill=green!10,right=of b] (q) {H372\\十轮精确线长恢复};
+\node[fill=orange!12,right=of q] (x) {H375\\五轮同形交换};
+\draw[arr] (r)--(s); \draw[arr] (s)--(c); \draw[arr] (c)--(f);
+\draw[arr] (f.south)|-(a.north); \draw[arr](a)--(b); \draw[arr](b)--(q); \draw[arr](q)--(x);
+\end{tikzpicture}
+\end{center}
+adaptec1 归档全链耗时 236.40 s；最后五轮交换耗时 37.63 s。下面逐阶段说明其难点、动机、方法与评价准则。
+
+\chapter{第一阶段：得到密度可接受的初始解}
+\section{中心高斯初始布局}
+\paragraph{难点}
+原始 Bookshelf 坐标不作为可继承的统一起点，而中心随机布局会造成接近 100\% 的超容量率。若此时直接使用式~\eqref{eq:densitygrad}，绝大多数单元只看到局部网格边缘，难以形成有组织的全局扩散。
+
+\paragraph{动机与方法}
+把所有可移动单元放在版图中心附近，并加入标准差为版图尺度 $0.001$ 的高斯扰动：
+\begin{equation}
+ x_i=x_c+0.001W_{\mathcal R}\xi_i,\qquad
+ y_i=y_c+0.001H_{\mathcal R}\zeta_i,
+ \qquad \xi_i,\zeta_i\sim\mathcal N(0,1). \label{eq:init}
+\end{equation}
+微扰只用于打破完全重合造成的对称性。此时的任务不是立刻满足容量，而是给后续线长方向和电场方向一个确定、可复现的起点。
+
+\section{H219：先建立线长拓扑}
+\paragraph{难点}
+高度拥挤时若立即强行扩散，属于同一条网的单元可能被推向不同方向，后续即使密度合格，线长也难以恢复。
+
+\paragraph{动机}
+先让相连单元形成相对紧凑的几何关系，再启动密度扩散。这个阶段相当于回答“谁应该靠近谁”，而不是回答“最终应该放在哪个空网格”。
+
+\paragraph{方法与梯度}
+执行 200 次仅线长 Adam 更新，密度和静电权重均为零：
+\begin{equation}
+ \bm g_i=\widetilde{\bm g}^W_i,
+ \qquad \lambda=\mu=0. \label{eq:seedgrad}
+\end{equation}
+方向按式~\eqref{eq:epsilonactive} 计算，前向值仍按式~\eqref{eq:hpwl}。adaptec1 的归档结果约为 43.035M HPWL、96.056\% 超容量率。超容量率仍高是预期现象；本阶段只保存连线拓扑。
+
+\section{H219：128 网格静电同伦}
+\paragraph{难点}
+中心团块中的许多单元密度梯度为零，或者不同网格的局部梯度互相抵消。直接把 $\lambda$ 调大无法启动这些单元。
+
+\paragraph{动机}
+用较粗的 $128\times128$ 网格先处理大尺度拥挤。粗网格忽略细小空洞，泊松电场把中心正电荷向外围低密度区域推开；随着布局展开，再逐步退出电场。
+
+\paragraph{方法与梯度}
+共 24 个阶段，每阶段 50 次更新。梯度按式~\eqref{eq:totalgrad} 计算：线长项保护连接关系，精确交叠项在矩形切过网格边界时提供容量压力，静电项在零梯度区提供长程方向。$\mu$ 随阶段衰减，后期把 $\lambda$ 增大并令 $\mu=0$。adaptec1 继承的第 1100 次快照约为 60.617M/71.708\%。这里牺牲线长换取大尺度展开。
+
+\section{H221：512 网格精细同伦与中间布局选择}
+\paragraph{难点}
+粗网格只能消除大团块，不能正确反映小单元、窄通道和固定宏周围的细容量。直接把粗网格终点当最终解会低估局部拥挤。
+
+\paragraph{动机}
+在 $512\times512$ 网格上重新计算式~\eqref{eq:overlaparea}--\eqref{eq:densitygrad}，使容量评价与最终审核尺度一致；仍保留一段电场过渡，避免网格突然加密造成剧烈振荡。
+
+\paragraph{方法与梯度}
+执行 8 个阶段、每阶段 50 次更新，仍使用式~\eqref{eq:totalgrad}，但采用更强的物理尺度校准。程序逐行记录精确 $W$ 与 $\Overflow$，选择低超容量且线长较好的中间布局，而不是机械地取最后一次迭代。归档选择点为 109.426M HPWL、7.752\% 超容量率。图~\ref{fig:homotopy} 展示 $\mu$ 退出、$\lambda$ 接管以及精确评价量的变化。
+\begin{figure}[H]\centering
+\includegraphics[width=.94\textwidth]{fig_homotopy_detail.png}
+\caption{H219/H221 静电同伦轨迹。蓝线为精确 HPWL，橙线为精确超容量率；电场权重逐步降为零，网格交叠项随后接管。}\label{fig:homotopy}
+\end{figure}
+
+\section{其他降低密度方案：如何破解零梯度}
+以下方案并不是简单地“更换密度权重”。它们分别改变边界方向的可见范围、直接跨越分段折点，或把局部微分问题改写成有限距离的容量搬运。为避免混淆，所有方案最终仍用式~\eqref{eq:density} 的精确超容量率评价结果。
+
+\subsection{H52--H54：扩大边界方向的感知范围}
+\paragraph{难点与动机}
+在精确模型中，$\min(v,c)$ 对变量 $v$ 的导数在 $v<c$ 时为 1，在 $v>c$ 时为 0。若单元距离折点 $c$ 尚有一小段距离，局部导数不会提前反映即将发生的分段切换。H52--H54 希望让单元在真正碰到网格边界之前，就能“看见”邻近分段。
+
+\paragraph{方向构造}
+对距离折点为 $d$ 的相邻分段定义衰减权重
+\begin{equation}
+ q_{\epsilon_D}(d)=\left[1-\frac{d}{\epsilon_D}\right]_+^r. \label{eq:densityepsweight}
+\end{equation}
+以 $m(v,c)=\min(v,c)$ 为例，给变量分支和常数分支分别记分
+\begin{equation}
+ s_v=\begin{cases}1,&v\le c,\\q_{\epsilon_D}(v-c),&v>c,\end{cases}
+ \qquad
+ s_c=\begin{cases}1,&c\le v,\\q_{\epsilon_D}(c-v),&c>v,
+ \end{cases}
+\end{equation}
+再用
+\begin{equation}
+ \widetilde{\frac{\partial m}{\partial v}}
+ =\frac{s_v}{s_v+s_c} \label{eq:densityepsmin}
+\end{equation}
+代替硬切换导数；$\max$ 分支采用对称定义。将这些方向代入式~\eqref{eq:densitygrad}，即使单元尚未切过网格边界，只要距离小于 $\epsilon_D$，也可能得到非零建议方向。实验先取约 8 个网格宽，再依次缩到 4 和 2 个网格宽，意图先扩大可见范围、后逐步回到精确分段。
+
+\paragraph{为何没有成为主路径}
+该方向能把超容量率从约 97\% 降至 38.82\%，说明“提前激活邻近分段”确实能缓解零梯度。但式~\eqref{eq:densityepsmin} 不是精确交叠函数在当前位置的真实次梯度；一个单元可能同时收到多个远处边界的虚拟作用，方向相消或误导都很常见。最终 HPWL 升至约 1204.24M，说明它缺少对连线拓扑的保护。
+
+\subsection{H58：直接跳到交叠函数折点}
+\paragraph{难点与动机}
+若某个坐标区间内 $D$ 完全不变，沿局部梯度走任何小步都没有意义。H58 不再试图在平坦区内部制造梯度，而是直接求出“导数下一次发生变化”的位置。
+
+\paragraph{候选构造与审核}
+交叠关系改变的必要位置是单元边缘和网格边界重合：
+\begin{equation}
+ \mathcal X_i=\left\{b_x^-\!\pm\frac{w_i}{2},
+ b_x^+\!\pm\frac{w_i}{2}:b\in\Bcal\right\},
+ \quad
+ \mathcal Y_i=\left\{b_y^-\!\pm\frac{h_i}{2},
+ b_y^+\!\pm\frac{h_i}{2}:b\in\Bcal\right\}. \label{eq:allbreakpoints}
+\end{equation}
+对 $x'\in\mathcal X_i$ 或 $y'\in\mathcal Y_i$ 临时移动单元，并重新计算
+\begin{equation}
+ \Delta W=W(\bm z')-W(\bm z),\qquad
+ \Delta D=D(\bm z')-D(\bm z),\qquad
+ \Delta O=\Overflow(\bm z')-\Overflow(\bm z). \label{eq:h58audit}
+\end{equation}
+因此，即使当前位置的密度梯度为零，也能一步越过整个常值区间，到达新的活跃分段。
+
+\paragraph{局限}
+H58 的早期接受规则过于严格：每次都要求精确超容量率立即下降。从一个过载网格搬到另一个过载网格时，$D$ 可能因超额分布更均匀而下降，但总超额面积暂时不变，即 $\Delta D<0$ 而 $\Delta O=0$。这些中间转运动作会被拒绝，所以 20 轮后仍约为 94.73\%。这说明“能跨越折点”还不够，还需要允许协同搬运或暂时中性的容量转运。
+
+\subsection{H67：用网格价格形成非局部容量方向}
+\paragraph{难点与动机}
+局部梯度只描述当前位置附近的面积变化，却不告诉单元远处哪个区域更空。H67 给每个网格一个独立价格，把“从高拥挤区搬到低拥挤区”转化为有限移动的收益。
+
+\paragraph{价格与候选得分}
+一种对应的对偶更新可写为
+\begin{equation}
+ p_b^{k+1}=\left[p_b^k+\eta_p
+ \frac{u_b^k-\rho_tA_b}{A_b}\right]_+, \label{eq:binprice}
+\end{equation}
+即网格持续过载时价格上升，有余量时价格下降。单元从当前位置移动到候选位置 $z_i'$ 的容量价格变化为
+\begin{equation}
+ \Delta P_i(z_i')=\sum_b p_b
+ \left(a_{ib}(z_i')-a_{ib}(z_i)\right). \label{eq:pricedelta}
+\end{equation}
+即使 $\nabla D(z_i)=0$，只要起点与终点覆盖的价格不同，$\Delta P_i$ 仍能区分候选，从而产生非局部搬运方向。
+
+\paragraph{局限}
+该方案把超容量率降至约 83.13\%，但 HPWL 升至约 204.57M。原因是 $p_b$ 只描述“哪个网格缺容量”，没有描述“这个单元与哪些单元相连”。多个单元各自追逐低价区域时，容易破坏二维连线拓扑。
+
+\subsection{H68：先在粗网格跨越多个细分段}
+\paragraph{难点与动机}
+在 $512\times512$ 网格上，一个真正有容量的目标区域可能隔着许多细网格折点。逐个折点搜索不仅昂贵，也容易在中间过载网格处停住。H68 先把细网格聚合成粗区域，让一次粗移动跨过多个细尺度平坦段。
+
+\paragraph{粗细层次}
+设粗网格 $B$ 包含一组细网格 $b\subset B$，则
+\begin{equation}
+ u_B^{\rm coarse}=\sum_{b\subset B}u_b,
+ \qquad C_B^{\rm coarse}=\sum_{b\subset B}\rho_tA_b,
+ \qquad s_B^{\rm coarse}=[u_B^{\rm coarse}-C_B^{\rm coarse}]_+. \label{eq:coarsecapacity}
+\end{equation}
+先在约 $64\times64$ 的粗网格上把单元从 $s_B^{\rm coarse}>0$ 的区域移向有余量区域，再把坐标投影回 $512\times512$ 网格，按精确矩形交叠重新审核。粗尺度的一次移动相当于跨过多个细尺度零梯度区间。
+
+\paragraph{局限}
+它把超容量率降至约 69.27\%，优于单纯网格定价；但粗区域隐藏了固定宏周围的窄通道和细粒度网络结构，重新分配时容易把相连单元分开，HPWL 达到约 341.72M。
+
+\subsection{H100：远距离折点搜索与线长回收交替}
+\paragraph{难点与动机}
+H58 只看近处折点，搜索半径不足；H68 的粗网格又会丢失过多细节。H100 保留 $512\times512$ 精确网格，但显式扩大折点候选半径，并把密度下降与线长回收分开执行。
+
+\paragraph{候选集合和两步循环}
+对半径 $R$ 内的网格边界构造
+\begin{equation}
+ \mathcal D_i(R)=\left\{(x'-x_i,0):x'\in\mathcal X_i,
+ |x'-x_i|\le R\right\}
+ \cup\left\{(0,y'-y_i):y'\in\mathcal Y_i,
+ |y'-y_i|\le R\right\}. \label{eq:widebreakpoints}
+\end{equation}
+实验把 $R$ 扩到约 64 个网格。每轮先选取能降低精确超容量率的远跳
+\begin{equation}
+ d_i^{\rm den}=\arg\min_{d\in\mathcal D_i(R)}
+ \Overflow(\bm z+d), \label{eq:h100density}
+\end{equation}
+再固定新的容量上限 $\tau_k$，执行线长回收
+\begin{equation}
+ \min_d W(\bm z+d)
+ \quad\text{s.t.}\quad\Overflow(\bm z+d)\le\tau_k. \label{eq:h100recover}
+\end{equation}
+远跳直接越过零梯度区，第二步则减轻远跳造成的连线损失。
+
+\paragraph{结果与判断}
+第三轮达到 6.24086\%，证明有限距离的精确折点枚举确实可以解决零梯度困局。但每个单元的候选数随半径增长，候选又需要精确更新受影响网格和关联网，运行时间与 HPWL 代价都高于静电同伦。故 H100 是重要的机制验证，却不适合作为 H375 的主前缀。
+
+综合这些实验，破解零梯度有三条主要路径：用邻近分段或全局势场构造非零方向；显式跳到精确分段折点；把问题改写成有限距离的容量分配。静电同伦在运行时间、密度下降和拓扑保护之间最均衡，因此成为 H375 的第一阶段主路径。
+
+\chapter{第二阶段：在容量上限内恢复 HPWL}
+\section{统一的精确候选审核}
+从 H252 开始，并非所有步骤都使用梯度下降。对候选位移 $d$，程序先临时移动一个单元或一个节点组，再精确计算
+\begin{equation}
+ \Delta W(d)=W(\bm z+d)-W(\bm z),\qquad
+ \Delta O(d)=\Overflow(\bm z+d)-\Overflow(\bm z). \label{eq:exactdelta}
+\end{equation}
+候选方向可以来自梯度、网格折点、网的几何中心或节点组共享方向；但是否提交只由式~\eqref{eq:hpwl}、\eqref{eq:density} 的精确前向值决定。这样可以跨过零梯度区，又不会把人为构造的候选方向冒充真实梯度。
+
+\section{H252：暂时放宽到 15\%}
+\paragraph{难点}
+H221 已接近 7\%，但静电扩散把同一条网的单元拉散。若立刻限制 $\Overflow\le7\%$，许多能显著缩短线长的聚拢移动会因轻微增加拥挤而被拒绝。
+
+\paragraph{动机}
+暂时允许使用一部分容量余量，让连线拓扑先恢复，再由后续阶段收紧。优化问题写为
+\begin{equation}
+ \min_{\bm z} W(\bm z)\quad\text{s.t.}\quad \Overflow(\bm z)\le0.15. \label{eq:cap15}
+\end{equation}
+
+\paragraph{方法}
+候选包括负线长方向、单轴步长、最近网格折点、相邻单元支撑中心，以及最多 16 个同网节点的共享移动。折点坐标显式取自
+\begin{equation}
+ x_i=b_x^\pm\mp\frac{w_i}{2},\qquad
+ y_i=b_y^\pm\mp\frac{h_i}{2}, \label{eq:breakpoints}
+\end{equation}
+即让单元某条边与网格边界重合。它能直接越过式~\eqref{eq:intervalgrad} 为零的内部区间。接受条件是 $\Delta W<0$ 且新超容量率不超过 15\%。两轮从 109.426M/7.804\% 到 94.549M/15.000\%。
+
+\section{H253：在 15\% 区间内恢复连线关系}
+\paragraph{难点}
+逐单元按照密度方向移动时，同一条网的节点可能各自逃向不同空区，线长方向与密度方向互相拉扯。
+
+\paragraph{动机}
+让同一条低度数网中的可移动节点共享线长方向，使它们更像一个松散节点组共同移动。对网 $e$，先计算
+\begin{equation}
+ \overline{\bm g}_e^W=\frac{1}{|\Mcal_e|}\sum_{j\in\Mcal_e}\widetilde{\bm g}_j^W,
+ \qquad
+ \bm g_i^{\rm share}=\frac{1}{d_i}\sum_{e\ni i}\overline{\bm g}_e^W. \label{eq:sharedgrad}
+\end{equation}
+共享方向只改变坐标更新，不改变 HPWL 定义。
+
+\paragraph{方法与梯度}
+连续更新使用
+\begin{equation}
+ \bm g_i=(1-\alpha)\widetilde{\bm g}_i^W+\alpha\bm g_i^{\rm share}
+ +0.5\,\lambda_i\bm g_i^D, \label{eq:h253grad}
+\end{equation}
+并取较大的步长比例 0.002。实现中共享权重为 1，因此此阶段主要沿组内平均线长方向移动，密度项以中等强度约束。第 80 次记录为 86.242M/13.891\%。
+
+\section{H254：把超容量率重新压回 7\%}
+\paragraph{难点}
+H253 已明显降低 HPWL，但消耗了容量余量；如果继续以线长为主，会停在约 14\% 而无法进入最终可行带。
+
+\paragraph{动机与方法}
+保持式~\eqref{eq:h253grad} 的共享方向结构，把密度梯度倍率从 0.5 提高到 4.75，并把步长比例降到 0.001：
+\begin{equation}
+ \bm g_i=(1-\alpha)\widetilde{\bm g}_i^W+\alpha\bm g_i^{\rm share}
+ +4.75\,\lambda_i\bm g_i^D. \label{eq:h254grad}
+\end{equation}
+较强容量压力负责收紧，较小步长减少跨越 7\% 边界时的振荡。所选中间布局为 89.549M/6.557\%。线长比 H253 略升，是重新满足容量约束的必要代价。
+
+\section{H255/H257：7\% 上限下的五轮精确恢复}
+\paragraph{难点}
+接近 7\% 边界后，连续梯度一步稍大就会越界；一步太小又会困在零梯度分段中。
+
+\paragraph{动机与方法}
+停止连续密度更新，改为有限候选搜索。候选来自四类方向：式~\eqref{eq:epsilonactive} 的负线长方向；分别只改变 $x$ 或 $y$ 的单轴方向；式~\eqref{eq:breakpoints} 的精确网格折点；相连节点或局部支撑节点的坐标中心。沿每个方向做最多 6 次缩步搜索，接受条件为
+\begin{equation}
+ \Delta W(d)<0,\qquad \Overflow(\bm z+d)\le0.07+\tau_{\rm fp}. \label{eq:cap7}
+\end{equation}
+H255 做四轮，H257 再做一轮，最终得到 87.119M/6.999958\%。这里破解零梯度的方法不是修改密度导数，而是直接把候选放到导数将发生变化的边界位置，再用精确值验收。
+
+\section{H372：只搬运真正超额的容量}
+\paragraph{难点}
+H257 虽满足 7\%，但局部过载仍呈碎片状。逐节点长距离搜索成本高；若重新把所有单元均匀排序，又会破坏已经恢复的连线关系。
+
+\paragraph{动机}
+把版图递归切成小区域，只搬运某一侧超过固定宏感知容量的最小面积，而让其余单元留在原侧。设区域 $Q$ 被切为 $Q_L,Q_R$，两侧可用容量为 $C_L,C_R$，当前可移动面积为 $A_L,A_R$。若左侧超额，选择靠近分割线的最小集合 $T$，满足
+\begin{equation}
+ A_L-\sum_{i\in T}a_i\le C_L,
+ \qquad A_R+\sum_{i\in T}a_i\le C_R. \label{eq:surplus}
+\end{equation}
+
+\paragraph{方法}
+从当前位置决定节点初始归属，递归切分到 8 个网格大小的叶区域；对必须跨侧的节点，优先选择最近的有余量位置，并以关联网的精确 $\Delta W$ 打破平局。该步骤不计算连续梯度，而是显式满足面积守恒和区域容量。adaptec1 从 87.119M/7.000\% 变为 93.705M/2.306\%。HPWL 暂时上升，但获得约 4.7 个百分点可供后续使用的容量余量。
+
+\section{H372：十轮精确线长恢复}
+\paragraph{难点}
+容量分配制造了大量余量，也制造了线长损失。需要把余量“花回”线长，同时保证总超容量率不超过 7\%。
+
+\paragraph{动机与方法}
+除 H255/H257 的单节点候选外，再从度数不超过 16 的网构造最多 8 个节点的连通组。组内节点共享刚性位移 $\bm d_G$；其建议方向可由组内密度梯度或线长梯度平均得到：
+\begin{equation}
+ \bm d_G\ \parallel\ -\frac1{|G|}\sum_{i\in G}
+ \left(\widetilde{\bm g}_i^W+\lambda\bm g_i^D\right). \label{eq:groupdir}
+\end{equation}
+由于整组可跨过多个网格边界，它能处理“单个节点移动不降超容量、多个节点协同才有效”的情况。每个候选仍求解一个小型精确筛选问题：
+\begin{equation}
+ d_k^*=\arg\min_{d\in\mathcal D_k}W(\bm z_k+d)
+ \quad\text{s.t.}\quad\Overflow(\bm z_k+d)\le0.07+\tau_{\rm fp}. \label{eq:recoveryoracle}
+\end{equation}
+十轮将 HPWL 从 93.705M 降至 86.190M，超容量率回到并保持在 6.99999\% 左右。图~\ref{fig:tail} 显示先制造容量余量、再逐轮恢复线长的过程。
+\begin{figure}[H]\centering
+\includegraphics[width=.92\textwidth]{fig_exact_tail.png}
+\caption{H372 容量分配、十轮精确线长恢复与 H375 最终交换。容量分配先降低超容量率，后续再把余量用于降低 HPWL。}\label{fig:tail}
+\end{figure}
+
+\section{H375：五轮同形交换}
+\paragraph{难点}
+H372 末点已经紧贴 7\% 上限，普通移动几乎都会改变网格占用。此时需要一个天然不影响密度的线长优化算子。
+
+\paragraph{动机与方法}
+只交换宽高完全相同的两个可移动单元 $i,j$ 的中心坐标。因为形状相同，对任意网格 $b$ 都有
+\begin{equation}
+ a_{ib}(p_i)+a_{jb}(p_j)=a_{jb}(p_i)+a_{ib}(p_j),
+ \quad u_b^{\rm after}=u_b^{\rm before},
+ \quad\Overflow^{\rm after}=\Overflow^{\rm before}. \label{eq:swapinvariant}
+\end{equation}
+所以无需密度梯度，也无需容量回退。只重新计算两个节点关联网集合 $\mathcal N(i)\cup\mathcal N(j)$ 的精确线长增量：
+\begin{equation}
+ \Delta W_{i\leftrightarrow j}=
+ \sum_{e\in\mathcal N(i)\cup\mathcal N(j)}
+ \left(W_e^{\rm after}-W_e^{\rm before}\right), \qquad
+ \Delta W_{i\leftrightarrow j}<0\ \Longrightarrow\ \text{接受}. \label{eq:swapdelta}
+\end{equation}
+候选优先来自相连网中的同形节点，再补充半径 64 个网格内的空间候选；每个节点最多考察 32 个对象，对其中 16 个做精确重算。五轮把 86.189626M 降至 85.999318M，超容量率保持 6.999990\%。本阶段完全不使用 epsilon-active 梯度。
+
+\begin{figure}[H]\centering
+\includegraphics[width=.94\textwidth]{fig_full_chain_convergence.png}
+\caption{H375 全链条中间布局轨迹。每个点是一个阶段输出，不应解释成同一次连续梯度下降的迭代。}\label{fig:full}
+\end{figure}
+
+\clearpage
+\section{其他联合优化方案}
+下面几组实验不是若干互不相关的“技巧”，而是在回答同一个问题：当布局已接近容量边界时，怎样继续降低
+$W(\bm z)$，又不把已经得到的密度结果破坏掉。它们分别从权重调度、跨平台搜索、严格不变量、约束放宽
+和机制消融五个角度检验了这一问题。
+
+\subsection{H76--H78：由实际误差控制两个目标的交接}
+固定次数的权重退火有一个直接缺陷：迭代次数并不等于布局状态。若电场权重 $\mu$ 下降过早，精确交叠项
+又恰好处在零梯度区，节点便失去把它推出拥挤团块的长程方向；若 $\mu$ 保持过久，布局会继续服从粗网格
+电势，而不能精确修复局部矩形交叠。H76--H78 因而尝试让权重由精确超容量率的变化来控制，而不是由
+单纯的迭代编号控制。记第 $k$ 个十步窗口末的精确超容量率为 $o_k$，目标为 $o_\star=0.07$，触发时
+误差为 $e_0=o_{k_0}-o_\star$，则 H78 的密度权重增量可写成
+\begin{equation}
+r_k=\operatorname{clip}\!\left(\frac{o_k-o_\star}{e_0},0,1\right),\qquad
+\lambda_{k+1}=\min\{150,\lambda_k+5r_k\}.
+\label{eq:h78lambda}
+\end{equation}
+只要当前结果距离 7\% 仍远，$r_k$ 就接近 1，精确密度压力增长较快；接近目标时增量自然减小。电场
+权重先在 100 次预热中保持 $\mu=16$，随后只在十步窗口边界衰减：
+\begin{equation}
+\mu_{k+1}=0.8\mu_k .
+\label{eq:h78mu}
+\end{equation}
+两式共同表达的动机是：先保留非局部电场来提供连续方向，再让精确交叠项逐步接管。这里并没有修改
+式~\eqref{eq:density} 的次梯度；零分量仍然存在，只是节点在电场方向上先移动后，原来不活跃的矩形边界
+会被激活，精确密度项才重新得到非零导数。H77 只在判定“停滞”的窗口增加 $\lambda$，结果末值仅为 75，
+密度压力不足；H78 用剩余误差驱动 $\lambda$，最终达到 328.825M/56.3286\%。这证明状态控制优于突然
+切换目标，但 56.33\% 离 7\% 仍远，说明调权本身不能代替后续精确的容量重排。
+
+\subsection{H94/H96：远距离折点下降与受约束线长回收交替}
+H94/H96 针对的是另一种困局：局部导数为零时，并不意味着远处没有更低密度的位置。若只用当前导数，
+算法看不到穿过平坦区以后才发生的目标变化。因此它把信赖半径扩大到 32 个网格，枚举式~\eqref{eq:breakpoints}
+中的矩形边缘事件，并在有限候选集合中直接比较精确目标。一次密度阶段可写成
+\begin{equation}
+\bm d_k^{D}=\arg\min_{\bm d\in\mathcal D_{32}(\bm z_k)}
+ D(\bm z_k+\bm d),\qquad
+ \bm z_{k+\frac12}=\bm z_k+\bm d_k^{D},
+\label{eq:h94density}
+\end{equation}
+其中 $\mathcal D_{32}$ 是由 32 格范围内的精确折点组成的有限集合。式~\eqref{eq:h94density} 不需要
+$\nabla D$ 在出发点非零：只要某个远折点使交叠边长发生变化，有限差分
+$D(\bm z_k+\bm d)-D(\bm z_k)$ 就能发现它。密度下降以后再做线长回收，形式为
+\begin{equation}
+\bm d_k^{W}=\arg\min_{\bm d\in\mathcal R(\bm z_{k+\frac12})}
+ W(\bm z_{k+\frac12}+\bm d)
+\quad\text{s.t.}\quad
+O(\bm z_{k+\frac12}+\bm d)\leq \bar O_k,
+\label{eq:h94recover}
+\end{equation}
+这里 $\bar O_k$ 是本轮已经得到的精确超容量上限。如此交替的动机是允许密度阶段临时付出线长代价，
+但不允许回收阶段把密度成果全部吃掉。H94 从 26.4031\% 上限继续搜索，H96 又从 H94 的 15.6757\%
+结果进行第二个宽半径周期，最后到达约 11.2371\%。它确实跨过了零梯度平台，但每个节点的候选数量随
+搜索半径显著增加，而且远距离搬动会扰乱连接拓扑，所以运行时间和 HPWL 代价都较高。它更适合作为
+“精确非局部候选可以破局”的证据，而不是 H375 的最终主路线。
+
+\subsection{H102：用同形交换把密度从优化变量中消去}
+当布局已经达到容量要求以后，最稳妥的线长优化不是继续在 $W+\lambda D$ 上做小步下降，而是构造一个
+使 $D$ 恒定的搜索空间。H102 只交换宽高完全相同的两个可移动节点 $i,j$。交换前后每个空间位置上仍
+放着同样大小的矩形，因此任意网格 $b$ 的占用面积满足式~\eqref{eq:swapinvariant}，并有
+\begin{equation}
+D(\bm z')=D(\bm z),\qquad O(\bm z')=O(\bm z).
+\label{eq:h102invariant}
+\end{equation}
+于是候选是否接受只需计算与 $i,j$ 相连的网络：
+\begin{equation}
+\Delta W_{ij}=\sum_{e\in\mathcal N(i)\cup\mathcal N(j)}
+\left(W_e(\bm z')-W_e(\bm z)\right),\qquad
+\Delta W_{ij}<0\ \Longrightarrow\ \text{接受交换}.
+\label{eq:h102accept}
+\end{equation}
+这个方案并不是“修复”密度次梯度，而是彻底绕开它：在密度严格不变的等值集合上，只优化线长。因此即使
+所有密度次梯度分量均为零，接受判据仍然有效。H102 的十轮交换将 275.806M 降到 169.667M，同时
+6.24097\% 的精确超容量率逐位不变。这一实验直接奠定了 H375 最后五轮网络感知同形交换的结构；区别在于
+H375 从更好的 H372 检查点出发，并把候选排序集中到最可能改善相关网络包围盒的交换上。
+
+\subsection{H376：为什么放宽到 15\% 后不能自动收紧回 7\%}
+H376 检验的假设是：7\% 容量上限可能把节点锁在一个线长较差的拓扑区域，短暂放宽约束或许可以让节点
+重排连接关系，再重新收紧。其两阶段问题是
+\begin{align}
+\bm z^{15}&\approx\arg\min_{\bm z} W(\bm z)
+&&\text{s.t. }O(\bm z)\leq 0.15,\label{eq:h376relax}\\
+\bm z^{7}&\approx\arg\min_{\bm z} W(\bm z)
+&&\text{s.t. }O(\bm z)\leq 0.07,
+\quad \bm z^{(0)}=\bm z^{15}.\label{eq:h376tighten}
+\end{align}
+五轮放宽阶段确实把 HPWL 从 85.9993M 降到 83.8203M，说明额外容量允许了有价值的拓扑重排；然而
+随后的五轮收紧只到 83.7498M/14.8704\%，没有返回 7\%。根本原因是约束集合的包含关系
+$\{O\leq0.07\}\subset\{O\leq0.15\}$ 并不保证局部下降路径连通。放宽阶段为了线长把节点送入新的拥挤
+团块后，式~\eqref{eq:densitygrad} 仍可能出现大量零分量；单纯把密度权重调大，只会放大已有非零分量，
+不能凭空产生跨越平台的方向。
+
+这也解释了 H254 为什么能够把 H253 的中间结果压回约 7\%，而 H376 不行。H254 的输入不是任意的 15\%
+低线长解，而是经过 H219/H221 静电同伦、H252 恢复和 H253 过桥以后得到的检查点；其空间分布仍保留
+长程扩散形成的容量通道，并未为线长而完全重组。H254 提高精确密度压力时，已有不少矩形边界处于活动
+状态，式~\eqref{eq:intervalgrad} 能沿这些边界继续压缩超容量。H376 则从已经 7\% 可行的 H375 解主动放宽，
+五轮线长恢复改变了局部拓扑，再要求同一套局部精确方向逆行返回；此时既缺少静电场的非局部引导，也没有
+重新执行 H372 的容量分配。因此，H254 不是消除了零梯度，而是它的输入状态中仍有足够多的有效活动边界；
+H376 的新拥挤团块则更容易落入局部方向不足的区域。
+
+\subsection{H403：用同一输入分离各类候选方向的贡献}
+H403 不是新的求解器，而是一组受控消融实验。所有变体从同一个 H372 十轮恢复检查点出发，保持 512
+网格、7\% 上限和精确接受规则不变，只逐项加入单节点移动、折点候选、紧凑方向、同网节点组、收缩以及
+同形交换。若完整算子集合为 $\mathcal A$，去掉机制 $j$ 后的边际贡献定义为
+\begin{equation}
+\Delta_j^W=W(\mathcal A\setminus\{j\})-W(\mathcal A),\qquad
+\Delta_j^O=O(\mathcal A\setminus\{j\})-O(\mathcal A).
+\label{eq:ablation}
+\end{equation}
+由于输入、容量上限和精确评价器均相同，$\Delta_j$ 比跨实验编号直接比较更能说明因果贡献。结果显示，
+折点与同网节点组构成最有效的精确恢复方向：单节点只能在局部活动边界上移动，而同网节点组可以让一组
+相互牵制的节点协同跨越平坦区。最后的同形交换把 86.168M 量级进一步降到 85.983M 量级，密度严格
+保持 7\%，但运行代价较高。这个结论支持 H375 的调度顺序：昂贵且密度不变的交换应放在容量分配和精确
+恢复之后，只作为最后的线长收尾，而不应承担降密度任务。
+
+\chapter{固定参数重放：adaptec1--4}
+为验证链条能否直接迁移，本文在同一主机上按顺序重放 adaptec1--4。四个数据集使用相同参数和相同阶段交接规则；时间为各求解器内部计时之和，不含进程启动、目录创建和文件写入。表~\ref{tab:replay} 同时给出 H221 精细扩散出口、H372 十轮恢复和 H375 最终值。
+
+\begin{table}[H]
+\centering\small
+\caption{2026-08-30 固定参数 H375 重放。HPWL 单位为 M；超容量率按精确矩形交叠计算。}\label{tab:replay}
+\begin{tabular}{lrrrrrrr}
+\toprule
+数据集 & \multicolumn{2}{c}{H221 精细扩散} & \multicolumn{2}{c}{H372 十轮恢复} & \multicolumn{2}{c}{H375 最终结果} & 总时间 (s)\\
+ & HPWL & 超容量率 & HPWL & 超容量率 & HPWL & 超容量率 & \\\midrule
+adaptec1 & 109.838 & 7.770\% & 89.309 & 7.000\% & \textbf{88.647} & 7.000\% & 179.706\\
+adaptec2 & 140.280 & 4.126\% & 102.340 & 7.000\% & \textbf{101.781} & 7.000\% & 202.873\\
+adaptec3 & 731.604 & 11.472\% & 369.210 & 7.000\% & \textbf{360.856} & 7.000\% & 337.639\\
+adaptec4 & 657.376 & 6.934\% & 264.678 & 7.000\% & \textbf{263.352} & 7.000\% & 352.237\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+四例最终都达到约 7\% 的超容量率，五轮同形交换还分别降低 0.662、0.558、8.354 和 1.327M HPWL。总阶段时间为 180--352 s。这里是“不针对单个数据集重新调参”的迁移基线，不是各数据集的最好成绩。尤其 adaptec1 重放为 88.647M，而历史归档 H375 为 85.999M，说明早期同伦二进制、输入中间布局和快照选择会影响最终进入的解区域。
+
+\chapter{结论与移植建议}
+H375 的完整逻辑可以概括为：先用精确 HPWL 梯度建立连接拓扑；再用泊松电场的全局梯度跨越密度零梯度平台；在细网格上选择低超容量中间布局；暂时放宽容量恢复线长；加强精确交叠梯度重新收紧；用网格折点和节点组候选跨过局部平坦段；通过分层容量分配制造余量；最后用精确候选搜索和同形交换收回线长。
+
+移植时可以把代码分成三层。第一层是不可替换的精确评价器：式~\eqref{eq:hpwl} 的引脚偏移线长和式~\eqref{eq:overlaparea}--\eqref{eq:density} 的矩形交叠。第二层是方向生成器：HPWL 次梯度、静电方向、网格折点和同网节点组。第三层是精确接受器：式~\eqref{eq:exactdelta}、\eqref{eq:cap7} 与同形交换不变量。若另一平台已经能产生低超容量初始解，只移植 H372 精确恢复和 H375 同形交换是可行的；若要从中心高斯布局完整复现，则还必须移植 H219/H221 的 DCT 泊松求解、梯度尺度校准和中间布局选择。
+
+\begin{thebibliography}{9}
+\bibitem{h375} epsilon-active, \emph{H375 Complete Chain Technical Report}, archived experiment report, 2026.
+\bibitem{h72} epsilon-active, \emph{H72--H73 Electrostatic Homotopy Results}, experiment analysis, 2026.
+\bibitem{dreamplace} Y. Lin et al., ``DREAMPlace: Deep Learning Toolkit-Enabled GPU Acceleration for Modern VLSI Placement,'' \emph{IEEE TCAD}, 2021.
+\bibitem{eplace} J. Lu et al., ``ePlace: Electrostatics-Based Placement Using Fast Fourier Transform and Nesterov's Method,'' \emph{TODAES}, 2015.
+\end{thebibliography}
+\end{document}

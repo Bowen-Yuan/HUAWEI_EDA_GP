@@ -1,0 +1,264 @@
+\documentclass[UTF8,11pt,a4paper]{ctexart}
+
+\usepackage[a4paper,margin=2.15cm]{geometry}
+\usepackage{amsmath,amssymb,bm,booktabs,tabularx,array,graphicx,float}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{caption}
+\usepackage{hyperref}
+
+\graphicspath{{figures/}}
+\setlength{\parindent}{2em}
+\setlength{\parskip}{0.25em}
+\setlength{\emergencystretch}{2em}
+\captionsetup{font=small,labelfont=bf}
+\hypersetup{unicode=true,colorlinks=true,linkcolor=blue,urlcolor=blue,pdftitle={H375 exact HPWL recovery report}}
+
+\newcommand{\HPWL}{\operatorname{HPWL}}
+\newcommand{\mov}{\mathcal{M}}
+\newcommand{\fix}{\mathcal{F}}
+\newcommand{\clip}[1]{\left[#1\right]_+}
+
+\title{H375 后半链：exact 非光滑尾部的 HPWL 恢复\\
+\large H252--H375 阶段方法、精确审核与收敛轨迹}
+\author{epsilon-active 非光滑布局实验记录}
+\date{2026 年 8 月}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本报告只分析 H375 的 exact 尾部，重点说明在 overflow 约束下如何把 H221 selector 的
+高 HPWL 逐步恢复到 H375 终点。尾部从 H221 的重新审核点
+$(109.425511\,{\rm M},7.803537\%)$ 开始，依次经过 H252 的 15\% relaxed exact
+recovery、H253 bridge、H254 retightening、H255/H257 exact polish、H372 hierarchical
+capacity assignment 与十轮 exact recovery，最后用 H375 等形状交换做 density-neutral
+拓扑优化。所有接受的候选都重新计算精确 max--min HPWL 和精确矩形--bin overlap；
+\texttt{density\_epsilon}=0，尾部不使用静电、WA/LSE 或平滑 density field。
+\end{abstract}
+
+\section{固定模型与 exact 候选审核}
+
+可移动单元 $i\in\mov$ 的矩形为
+\[
+ R_i(x_i,y_i)=[x_i-\tfrac12w_i,x_i+\tfrac12w_i]
+             \times[y_i-\tfrac12h_i,y_i+\tfrac12h_i].
+\]
+对 net $e$，含 pin offset 的精确线长为
+\begin{equation}
+ W(z)=\sum_e w_e\left(\max_{p\in e}X_p-\min_{p\in e}X_p
+                       +\max_{p\in e}Y_p-\min_{p\in e}Y_p\right),
+ \qquad z=(x_1,\ldots,x_{|\mov|},y_1,\ldots,y_{|\mov|}).
+ \label{eq:hpwl}
+\end{equation}
+矩形 $R_i$ 与 bin $B_b$ 的交叠面积为
+\begin{align}
+ a_{ib}&=\ell^x_{ib}\ell^y_{ib},\\
+ \ell^x_{ib}&=\clip{\min(x_i+\tfrac12w_i,b_x^+)-\max(x_i-\tfrac12w_i,b_x^-)},\\
+ \ell^y_{ib}&=\clip{\min(y_i+\tfrac12h_i,b_y^+)-\max(y_i-\tfrac12h_i,b_y^-)}.
+ \label{eq:area}
+\end{align}
+固定宏先占据不可移动容量：
+\begin{equation}
+ u_b=u_b^{\rm fix}+\sum_{i\in\mov}a_{ib},\qquad
+ C_b^{\rm mov}=\clip{\rho_tA_b-u_b^{\rm fix}},\qquad
+ O(z)=\frac{\sum_b\clip{u_b-\rho_tA_b}}{A_{\rm mov}}.
+ \label{eq:exactoverflow}
+\end{equation}
+尾部使用的平方超容量仅作为 piecewise active-bin 的权重：
+\begin{equation}
+ E_{\rm ex}(z)=\frac12\sum_b\frac{\clip{u_b-\rho_tA_b}^{2}}{A_b},\qquad
+ \frac{\partial E_{\rm ex}}{\partial x_i}
+ =\sum_b\clip{u_b/A_b-\rho_t}\,\frac{\partial a_{ib}}{\partial x_i},
+ \label{eq:excess}
+\end{equation}
+但 $O(z)$ 与 $W(z)$ 的前向值从未被替换。候选方向集合可以包含 breakpoint、轴向、
+节点组和坐标交换；对每个候选 $d$，先计算
+\begin{equation}
+ \Delta W(d)=W(z+d)-W(z),\qquad \Delta O(d)=O(z+d)-O(z),
+ \label{eq:delta}
+\end{equation}
+再按当前阶段的 cap 审核。这种 finite candidate oracle 是优化器层的搜索，不把伪方向
+声称为 overlap 的真实次梯度。
+
+\section{阶段 1：H252 relaxed exact recovery（15\% band）}
+
+\subsection{动机与操作}
+H221 为降低 overflow 把节点 spread 得过开，selector 的 HPWL 为 $109.425511$ M。
+若立即固定 $O\le7\%$，许多能够恢复 net-relative geometry 的聚拢移动会被拒绝。因此
+H252 暂时采用
+\begin{equation}
+ \min_z W(z)\quad\text{s.t.}\quad O(z)\le\tau_{15},
+ \qquad \tau_{15}=0.15.
+ \label{eq:cap15}
+\end{equation}
+候选包括 axis-separated displacement、最近 breakpoint、compact/support centroid、
+node move，以及最多 16 个 net-connected 节点的共享方向。接受规则是
+\begin{equation}
+ \Delta W(d)<0,\qquad O(z+d)\le0.15+\tau_{\rm fp},
+ \label{eq:h252accept}
+\end{equation}
+其中每次都重新计算式 \eqref{eq:hpwl} 和式 \eqref{eq:exactoverflow}。
+
+\subsection{结果}
+两轮 sweep 为
+\begin{equation}
+ (109.425511,7.803537\%)
+ \rightarrow(97.813945,14.999745\%)
+ \rightarrow(94.548507,14.999997\%),
+ \label{eq:h252result}
+\end{equation}
+其中第一、第二个分量分别为 HPWL (M) 与 overflow。15\% 是临时 topology-recovery
+band，不是对最终密度约束的修改。
+
+\section{阶段 2：H253 bridge 与阶段 3：H254 retightening}
+
+H253 在 512 网格上保留 exact overlap，使用 Adam 的连续方向作为短桥接：
+\begin{equation}
+ g_k=g_{W,k}+\lambda_k g_{E,k}+g_{\rm batch,k},
+ \qquad
+ z_{k+1}=z_k-\eta_k\,\operatorname{Adam}(g_k).
+ \label{eq:bridge}
+\end{equation}
+这里 $g_{\rm batch}$ 是 net-connected shared direction 的附加项，并不改变式
+\eqref{eq:hpwl} 或式 \eqref{eq:exactoverflow}；设置为 density scale $0.5$、net-batch
+weight $1$、step fraction $0.002$，且 \texttt{density\_epsilon}=0。row 80 得到
+\[
+ W=86.241998\ {\rm M},\qquad O=13.891233\%.
+\]
+
+H254 把容量压力重新接管：density weight scale 提高到 $4.75$，step fraction 降至
+$0.001$，并按 exact checkpoint 选择满足 7\% band 的状态。row 99 为
+\[
+ W=89.549340\ {\rm M},\qquad O=6.556721\%.
+\]
+因此 H254 的主要作用是降 overflow，而不是降 HPWL；相对于 H253，HPWL 暂时从
+$86.241998$ M 回升到 $89.549340$ M，这是 retightening 的容量代价。
+
+\section{阶段 4：H255/H257 exact node polish（7\% cap）}
+
+H255 固定 $O\le0.07$，依次尝试 epsilon-active HPWL、轴向步长、exact bin boundary
+breakpoint、net centroid 与 support centroid 方向；H257 再执行一轮。对处于 cap 内的
+状态，接受条件为
+\begin{equation}
+ \Delta W(d)<0,\qquad O(z+d)\le0.07+\tau_{\rm fp};
+ \label{eq:cap7accept}
+\end{equation}
+若当前超 cap，则还要求候选不增加 exact overflow。四轮 H255 与一轮 H257 为
+\begin{align}
+ 89.549340&\rightarrow88.064828\rightarrow87.567244\rightarrow87.317935
+ \rightarrow87.178874\\
+ &\rightarrow\boxed{87.119465}\ {\rm M},
+ \label{eq:polishresult}
+\end{align}
+末点 exact overflow 为 $6.999958\%$。breakpoint 只用于生成有限候选，未对 overlap
+函数作平滑或固定非零导数替换。
+
+\section{阶段 5：H372 hierarchical capacity assignment}
+
+\subsection{surplus-only 递归 cut}
+H257 已在 7\% band，但局部 bin 的 active set 仍很稀疏。H372 沿递归区域 $Q$ 的较长
+轴切成 $Q_L,Q_R$，固定宏感知容量为 $C_L,C_R$，只从 cut 附近搬运必要 surplus。若
+$A_L>C_L$，选择最小边界前缀 $T$ 满足
+\begin{equation}
+ A_L-\sum_{i\in T}a_i\le C_L,\qquad
+ A_R+\sum_{i\in T}a_i\le C_R.
+ \label{eq:surplus}
+\end{equation}
+位置 seeded 保留当前 side topology；固定宏不参与移动。该 assignment 不是 HPWL
+下降步骤，而是先制造可花费的容量 slack：
+\[
+ (87.119465,6.999958\%)
+ \longrightarrow(93.705492,2.306362\%).
+\]
+HPWL 的暂时上升是有意的，后续 recovery 使用该 slack 恢复 net 几何。
+
+\section{阶段 6：H372 exact recovery \texorpdfstring{$\times10$}{x10}}
+
+从 assignment checkpoint 出发，每轮生成 node-wise、breakpoint、compact centroid 和
+最多 8 节点的 net-connected rigid/shared candidates。每个候选求解一个小的 exact
+筛选问题：
+\begin{equation}
+ d_k^*=\arg\min_{d\in\mathcal{D}_k} W(z_k+d)
+ \quad\text{s.t.}\quad O(z_k+d)\le0.07+\tau_{\rm fp},
+ \quad \text{fixed capacity audit passes}.
+ \label{eq:recoveryoracle}
+\end{equation}
+十轮 HPWL 为
+\begin{align}
+ 93.705492&\rightarrow89.143747\rightarrow87.641415\rightarrow86.972538
+ \rightarrow86.632343\rightarrow86.450273\\
+ &\rightarrow86.343968\rightarrow86.278326\rightarrow86.234833
+ \rightarrow86.207181\rightarrow\boxed{86.189626}\ {\rm M}.
+ \label{eq:recoveryresult}
+\end{align}
+overflow 全程保持在约 $6.999990\%$。前几轮收益较大，后几轮进入 diminishing returns，
+表明容量 assignment 产生的 topology debt 已基本被回收。
+
+\section{阶段 7：H375 等形状 exchange \texorpdfstring{$\times5$}{x5}}
+
+H375 只在相同宽高 $(w,h)$ 的节点之间交换坐标中心。若节点 $i,j$ 形状相同，则对任意
+bin $b$：
+\begin{equation}
+ a_{ib}(p_i)+a_{jb}(p_j)=a_{jb}(p_i)+a_{ib}(p_j),
+ \qquad u_b^{\rm after}=u_b^{\rm before},
+ \qquad O^{\rm after}=O^{\rm before}.
+ \label{eq:swap}
+\end{equation}
+所以交换对 density 是 neutral 的；是否接受只看涉及节点 incident nets 的精确
+$\Delta W$。五轮交换得到
+\begin{equation}
+ 86.189626\rightarrow86.064268\rightarrow86.025509\rightarrow86.009906
+ \rightarrow86.002560\rightarrow\boxed{85.999318}\ {\rm M},
+ \label{eq:swapresult}
+\end{equation}
+overflow 保持 $6.999990\%$，共接受 14,371 次交换。该阶段贡献约 $0.190308$ M
+（约 $0.221\%$）的 HPWL 改善，作用是拓扑 polish，而不是重新建模 density。
+
+\section{结果表与收敛曲线}
+
+\begin{table}[H]
+\centering
+\caption{H252--H375 exact 尾部关键 checkpoint。}
+\label{tab:tail}
+\small
+\begin{tabularx}{\textwidth}{l l r r X}
+\toprule
+阶段 & checkpoint & HPWL (M) & overflow (\%) & 核心操作\\
+\midrule
+H252 & sweep 1 & 97.813945 & 14.999745 & 15\% cap，exact candidate recovery\\
+H252 & sweep 2 & 94.548507 & 14.999997 & 15\% band endpoint\\
+H253 & row 80 & 86.241998 & 13.891233 & net-batch bridge\\
+H254 & row 99 & 89.549340 & 6.556721 & strong retightening\\
+H257 & polish 5 & 87.119465 & 6.999958 & 7\% exact node polish\\
+H372 & assignment & 93.705492 & 2.306362 & surplus-only recursive cuts\\
+H372 & recovery 10 & 86.189626 & 6.999990 & ten-round exact recovery\\
+H375 & exchange 5 & \textbf{85.999318} & \textbf{6.999990} & equal-shape density-neutral exchange\\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.99\textwidth]{hpwl_recovery_curve.pdf}
+\caption{H252--H375 exact 尾部收敛曲线。上图为 exact HPWL，下图为 exact overflow；
+色带表示阶段边界，虚线为 7\% cap 和临时 15\% band。曲线仅连接真实 checkpoint，
+不表示对非光滑目标进行了平滑。H254 与 H372 assignment 的上升分别对应 retightening
+和容量分配，随后由 exact recovery 回收 HPWL。}
+\label{fig:hpwlcurve}
+\end{figure}
+
+\section{结论}
+
+后半链的 HPWL 下降不是单一 Adam run 的结果，而是三类操作的串联：
+\begin{enumerate}[leftmargin=2.1em,itemsep=0.15em]
+  \item H252/H253 暂时放宽容量约束，恢复被 global spread 拉散的 net topology；
+  \item H255/H257 与 H372 recovery 在 exact 7\% cap 下用 breakpoint、节点组和有限候选
+        审核逐步释放 topology debt；
+  \item H375 用等形状交换保持每个 bin 的 occupancy 不变，只优化 incident-net HPWL。
+\end{enumerate}
+从 H221 selector 的 $109.425511$ M 到 H375 的 $85.999318$ M，尾部共降低
+$23.426193$ M；但 H254 与 H372 assignment 的 HPWL 回升说明，容量恢复和 HPWL 恢复
+之间仍存在明确的阶段性权衡。
+
+\end{document}

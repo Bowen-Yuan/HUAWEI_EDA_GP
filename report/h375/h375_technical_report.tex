@@ -1,0 +1,960 @@
+% H375 complete-chain technical report
+% All numerical values in this document are copied from the archived CSV
+% summaries under epsilon-active/experiments and are intentionally reported
+% with their audit/provenance qualifiers.
+\documentclass[UTF8,a4paper,11pt]{ctexrep}
+
+\usepackage[a4paper,margin=2.15cm,headheight=15pt]{geometry}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{booktabs,longtable,tabularx,array,multirow}
+\usepackage{graphicx,float}
+\usepackage{xcolor}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,fit,calc,shapes.geometric}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{caption}
+\usepackage{hyperref}
+\usepackage{url}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!55!black,
+  citecolor=blue!55!black,
+  urlcolor=blue!55!black,
+  pdftitle={H375 完整求解链条技术报告},
+  pdfauthor={epsilon-active experiment}
+}
+
+\graphicspath{{figures/}}
+\setlength{\parindent}{2em}
+\setlength{\parskip}{0.25em}
+\setlength{\emergencystretch}{3em}
+\setlist{nosep,leftmargin=2.3em}
+\renewcommand{\arraystretch}{1.18}
+\captionsetup{font=small,labelfont=bf}
+
+\definecolor{stageblue}{RGB}{0,114,178}
+\definecolor{stageorange}{RGB}{230,159,0}
+\definecolor{stagegreen}{RGB}{0,158,115}
+\definecolor{stagered}{RGB}{213,94,0}
+\definecolor{stagepurple}{RGB}{204,121,167}
+\definecolor{stagegray}{RGB}{95,95,95}
+\definecolor{softblue}{RGB}{232,241,248}
+\definecolor{softorange}{RGB}{255,240,216}
+\definecolor{softgreen}{RGB}{230,244,238}
+\definecolor{softpurple}{RGB}{245,234,242}
+
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{H375 完整求解链条}
+\fancyhead[R]{精确非光滑 GP 技术报告}
+\fancyfoot[C]{\thepage}
+
+\newcommand{\HPWL}{\operatorname{HPWL}}
+\newcommand{\Overflow}{\operatorname{Overflow}}
+\newcommand{\clip}{\operatorname{clip}}
+\newcommand{\R}{\mathcal{R}}
+\newcommand{\M}{\mathcal{M}}
+\newcommand{\Fset}{\mathcal{F}}
+\newcommand{\Eset}{\mathcal{E}}
+\newcommand{\Bset}{\mathcal{B}}
+\newcommand{\dd}{\mathrm{d}}
+
+\title{H375 完整求解链条\ 技术报告\\
+\large 精确矩形重叠密度、epsilon-active HPWL 与容量恢复实验}
+\author{epsilon-active 独立 C++ 全局布局框架}
+\date{2026 年 8 月 28 日}
+
+\begin{document}
+
+\maketitle
+\thispagestyle{empty}
+
+\begin{abstract}
+本文对 adaptec1 数据集上的 H375 完整继承求解链条进行可复现记录。布局变量是可移动标准
+单元的连续 $(x,y)$ 坐标，最终质量指标始终由带 pin offset 的精确 max--min HPWL 与精确
+矩形--网格交叠面积计算。固定宏器件以不可移动的 bin 占用计入容量账本，\texttt{terminal\_NI}
+端口不计入物理容量；整个框架不执行行吸附、合法化、详细布局或合法性检查。
+
+链条从 fresh center--Gaussian raw 初始化开始，经 H219 HPWL-only seed、128 网格 H219
+静电同伦、512 网格 H221 细化，再进入 H252--H257 的 exact 非光滑恢复，最后经过 H372
+surplus-only hierarchical capacity assignment、十轮 exact recovery 和 H375 五轮等形状交换。
+H375 终点为 $85.999318$M HPWL、$6.999990\%$ 精确 overflow。与 DREAMPlace 论文 Table II
+的 adaptec1 GP 基线 $73.22$M 相比，HPWL 高 $17.453\%$；按 checkpoint handoff 的完整
+链条时间为 $236.40$ s，而论文 40-thread GP 时间为 $67$ s。因此，本文不宣称达到了论文
+的 1\% HPWL 和两倍运行时间门槛。需要特别区分的是：H219/H221 的早期正 $\mu$ 阶段确实
+使用了 DCT/Poisson 静电辅助；H252 之后的报告尾部才是严格的 exact overlap、exact HPWL
+非光滑求解。该区分是本报告的主要审计结论。
+\end{abstract}
+
+\noindent\textbf{关键词：} 全局布局；非光滑优化；精确矩形重叠；epsilon-active；固定宏容量；
+hierarchical assignment；H375
+
+\tableofcontents
+\listoffigures
+
+\chapter{报告范围与结论}
+
+\section{问题背景}
+挑战 5 要求在 ISPD2005 混合尺寸网表上完成 global placement（GP）。本报告只讨论连续
+GP，不生成 legalized placement。研究目标是将网络线长和密度约束写成可审计的非光滑模型，
+并检验一条多阶段求解链是否能同时满足质量和时间门槛。H375 是当前 a1 分支中记录的完整
+继承链，而不是从某个历史合法化结果重新开始的单次运行。
+
+\section{锁定约束}
+以下约束在代码、实验协议和结果审计中保持一致：
+\begin{enumerate}
+  \item HPWL 使用精确的 max--min 形式；epsilon-active 只选择活动片段，不修改 HPWL 值。
+  \item 密度使用每个矩形与每个 bin 的精确交叠面积；不使用 Gaussian、WA/LSE、Moreau
+        envelope、卷积或其它目标平滑。
+  \item 固定宏保持坐标不变，并以其真实交叠面积扣减可移动容量。
+  \item 不执行 legalization、row/site snapping、detailed placement 或 legality check。
+  \item OpenMP 线程请求限制为 $1$--$40$。H219--H257 的历史 checkpoint 使用 16 线程；
+        H372/H375 使用 40 线程。
+\end{enumerate}
+
+\section{核心结论一览}
+\begin{table}[H]
+\centering
+\caption{H375 终点与论文门槛的审计比较。}
+\label{tab:gate}
+\small
+\begin{tabularx}{\textwidth}{>{\raggedright\arraybackslash}p{2.65cm} >{\raggedright\arraybackslash}p{2.75cm} >{\raggedright\arraybackslash}p{2.75cm} >{\raggedright\arraybackslash}X}
+\toprule
+指标 & 论文/挑战门槛 & H375 & 判定与解释\\
+\midrule
+adaptec1 HPWL & $\le 73.9522$M（基线 $+1\%$） & $85.999318$M & 未通过；相对基线劣化 $17.453\%$\\
+精确 overflow & $<7\%$ & $6.999990\%$ & 通过（浮点容差内）\\
+GP 迭代 & $\le 5000$ & 各 GP 进程最大日志索引 1199/399；尾部用 22 次恢复 sweep & 通过单进程口径；恢复 sweep 不是 Adam iteration\\
+运行时间 & $\le 134$ s（$2\times67$ s） & $236.40$ s 完整 handoff 链 & 未通过；仅 H257 之后为 $102.63$ s\\
+合法化 & 不纳入本任务 & 未执行 & 符合范围\\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{重要的合规边界}
+H375 的最终评价目标是精确非光滑目标，且 H252 之后所有候选均由 exact HPWL 和 exact
+overlap 重新审计。然而，H219 和 H221 的正 $\mu$ 同伦阶段调用了 DCT Poisson 静电场，
+这与“整条链任何阶段均不得有静电辅助”的最严格解释不一致。因而本文采用以下严谨表述：
+H375 是“静电辅助初始化 + exact 非光滑尾部”的完整实验链；它不能被写成从 raw 到终点
+全程纯 exact overlap 的证据。若将静电也列为禁用项，则 H219/H221 应被替换，当前 H375
+结果不满足该附加约束。
+
+\chapter{数学模型与精确审计}
+
+\section{布局变量和矩形几何}
+设放置区域为
+\[
+  \R=[x_l,x_h]\times[y_l,y_h],
+\]
+可移动实例集合为 $\M$，固定宏集合为 $\Fset$。实例 $i$ 的连续坐标为 $(x_i,y_i)$，
+宽高为 $(w_i,h_i)$，其矩形写为
+\[
+  R_i(x_i,y_i)=
+  [x_i-\tfrac12w_i,x_i+\tfrac12w_i]
+  \times
+  [y_i-\tfrac12h_i,y_i+\tfrac12h_i].
+\]
+坐标在 oracle 内被限制在放置区域边界以内，但不被吸附到离散 row 或 site。
+
+\section{精确 HPWL}
+对 net $e\in\Eset$，pin $p$ 所属实例为 $i(p)$，Bookshelf pin offset 为
+$(\Delta x_p,\Delta y_p)$，则
+\[
+  X_p=x_{i(p)}+\Delta x_p,\qquad
+  Y_p=y_{i(p)}+\Delta y_p.
+\]
+精确线长为
+\begin{equation}
+  W(x,y)=\sum_{e\in\Eset}w_e\left[
+  \max_{p\in e}X_p-\min_{p\in e}X_p+
+  \max_{p\in e}Y_p-\min_{p\in e}Y_p\right].
+  \label{eq:hpwl}
+\end{equation}
+式 \eqref{eq:hpwl} 是所有报告表格中 HPWL 的唯一数值定义。即使计算方向采用活动集合，
+前向值仍由 max/min 直接求得。
+
+\section{精确矩形--bin overlap}
+将 $\R$ 划分为 $N_x\times N_y$ 个矩形 bin，bin $b$ 的边界为
+\([b_x^-,b_x^+]\times[b_y^-,b_y^+]$，面积为 $A_b$。实例 $i$ 对 bin 的一维截长为
+\[
+ \ell^x_{ib}=\left[\min(x_i+\tfrac12w_i,b_x^+)
+ -\max(x_i-\tfrac12w_i,b_x^-)\right]_+,
+\]
+\[
+ \ell^y_{ib}=\left[\min(y_i+\tfrac12h_i,b_y^+)
+ -\max(y_i-\tfrac12h_i,b_y^-)\right]_+,
+ \qquad a_{ib}=\ell^x_{ib}\ell^y_{ib}.
+\]
+固定宏占用和总占用分别为
+\begin{equation}
+ u_b^{\rm fix}=\sum_{j\in\Fset\setminus\{\texttt{terminal\_NI}\}}
+ |R_j\cap B_b|,
+ \qquad
+ u_b=u_b^{\rm fix}+\sum_{i\in\M}a_{ib}.
+ \label{eq:occupancy}
+\end{equation}
+目标密度为 $\rho_t$（实验中为 1），因此固定宏感知的可移动容量是
+\begin{equation}
+ C_b^{\rm mov}=\left[\rho_t A_b-u_b^{\rm fix}\right]_+.
+ \label{eq:movcap}
+\end{equation}
+实现先把固定矩形写入 immutable occupancy map，再叠加 movable rectangles；这使宏器件
+影响直接进入每一个相交 bin，而不是通过额外的软障碍项近似。
+
+\section{精确 overflow 和平方超容量}
+报告的 overflow 为
+\begin{equation}
+ O(x,y)=\frac{\displaystyle\sum_{b\in\Bset}[u_b-\rho_tA_b]_+}
+ {A_{\rm mov}},
+ \qquad A_{\rm mov}=\sum_{i\in\M}w_ih_i.
+ \label{eq:overflow}
+\end{equation}
+为实现难题 5 中的平方 density excess，GP 阶段还计算
+\begin{equation}
+ E_{\rm ex}(x,y)=
+ \frac12\sum_{b\in\Bset}A_b
+ \left[\frac{u_b}{A_b}-\rho_t\right]_+^2
+ =\frac12\sum_{b\in\Bset}
+ \frac{[u_b-\rho_tA_b]_+^2}{A_b}.
+ \label{eq:excess}
+\end{equation}
+平方项只改变 penalty 的数值权重，不改变 occupancy 和 overflow 的几何定义。对一个处于
+固定 active piece 的 bin，精确 piecewise 导数为
+\begin{equation}
+ \frac{\partial E_{\rm ex}}{\partial x_i}
+ =\sum_b e_b\frac{\partial a_{ib}}{\partial x_i},
+ \qquad
+ \frac{\partial a_{ib}}{\partial x_i}
+ =\frac{\partial\ell^x_{ib}}{\partial x_i}\ell^y_{ib},
+ \quad
+ e_b=\left[\frac{u_b}{A_b}-\rho_t\right]_+.
+ \label{eq:densitygrad}
+\end{equation}
+在矩形完整落于同一 bin 的内部区域，$\partial a_{ib}/\partial x_i$ 和
+$\partial a_{ib}/\partial y_i$ 可以同时为零；这正是 extreme subgradient sparsity 的来源。
+平方 excess 会放大已经 active 的超载 bin，却不会自动产生穿越 breakpoint 的方向。
+
+\section{epsilon-active HPWL 方向}
+当 net 的极值 pin 唯一时，普通 max/min 方向会集中在少数 pin。对 $x$ 方向，以最大端
+为例，代码使用
+\[
+ a^{\max}_{p,x}=\left[1-\frac{x_e^{\max}-X_p}{\epsilon}\right]_+^q,
+\]
+对最小端定义类似的 $a^{\min}_{p,x}$，再令
+\begin{equation}
+ g_{p,x}^{(e)}=w_e\left(
+ \frac{a^{\max}_{p,x}}{\sum_{r\in e}a^{\max}_{r,x}}
+ -\frac{a^{\min}_{p,x}}{\sum_{r\in e}a^{\min}_{r,x}}
+ \right).
+ \label{eq:epshpwl}
+\end{equation}
+$y$ 方向完全相同。H219--H257 使用 $\epsilon=125$、$q=4$；精确尾部的前向 HPWL
+仍然使用式 \eqref{eq:hpwl}。因此 epsilon 是次梯度选择器，而不是 WA、LSE 或其它平滑
+wirelength 模型。
+
+对 overlap 的边界方向，代码可以在 $\epsilon>0$ 时把相邻 affine pieces 纳入候选；
+H252--H375 的正式 exact 审计将 \texttt{density\_epsilon}=0，并通过 breakpoint、
+coordinate 和 group proposals 生成有限候选。每个候选都重新计算式 \eqref{eq:hpwl} 和
+式 \eqref{eq:overflow}，不把伪方向写成真实次梯度。
+
+\chapter{优化器、lambda 与同伦控制}
+
+\section{可扩展优化器接口}
+框架将优化器与两个 oracle 解耦。优化器只实现
+\[
+ \Delta z_k=\operatorname{Solver}(g_k,\eta_k,\text{state}_k),
+ \qquad z=(x_1,\ldots,x_{|\M|},y_1,\ldots,y_{|\M|}),
+\]
+并支持 Adam、AMSGrad、AdaGrad、Heavy-ball 和 SGD。H375 链的 GP 子阶段选用 Adam，
+而 exact recovery 使用候选审核，不依赖某个特定的连续优化器。这种边界使后续替换
+solver 不必改写 HPWL 或 overlap oracle。
+
+\section{DreamPlace 风格自适应 lambda}
+在有 density direction 的 GP 阶段，首先用初始梯度范数校准物理尺度：
+\begin{equation}
+ \lambda_0=s_\lambda
+ \frac{\|g_W\|_1}{\max(\|g_E\|_1,10^{-30})},
+ \qquad
+ \lambda_k=\lambda_0c_k.
+ \label{eq:lambda0}
+\end{equation}
+其中 $g_E$ 来自式 \eqref{eq:densitygrad} 的 exact piecewise 方向。DreamPlace policy
+根据相邻 HPWL 变化更新控制量 $c_k$：若 $\Delta W_k<0$，
+\begin{equation}
+ c_{k+1}=c_k\,1.05\max(0.9999^k,0.98),
+ \label{eq:lambdadec}
+\end{equation}
+否则使用
+\begin{equation}
+ c_{k+1}=c_k\,\clip\left(
+ 1.05^{1-\Delta W_k/\Delta W_{\rm ref}},0.95,1.05\right).
+ \label{eq:lambdainc}
+\end{equation}
+当 overflow 仍明显高于目标时，控制量还受到上限和 deadband 的约束。需要注意，
+H219 HPWL-only seed 的 density scale 为零；其中日志里的 lambda control 虽然增加，
+实际密度方向仍未进入坐标更新。
+
+\section{\texorpdfstring{正 $\mu$ 静电同伦的定义与审计}{正 mu 静电同伦的定义与审计}}
+为解释 H219/H221 的早期长程搬运，定义 DCT Poisson 辅助项
+\begin{equation}
+ -\nabla^2\phi=\rho,\qquad
+ E_{\rm el}=\frac12\int_{\R}\rho\phi\,\dd A,qquad
+ \bm{E}=-\nabla\phi.
+ \label{eq:electro}
+\end{equation}
+离散实现采用 DREAMPlace/ePlace 风格的 DCT、IDCT 和 DST/IDST 频域算子。阶段目标可写成
+归一化形式
+\begin{equation}
+ F_{\mu,\lambda}=
+ \frac{W}{W_0}
+ +\lambda\frac{E_{\rm ex}}{E_0}
+ +\mu\left(\frac{E_{\rm el}}{E_{{\rm el},0}}+E_{\rm anchor}\right).
+ \label{eq:homotopy}
+\end{equation}
+在 H219/H221 中 $\mu$ 从正值衰减，$\lambda$ 在 overflow 下降和 HPWL 响应后接管；
+报告尾部把物理 $\mu$ 强制为零。式 \eqref{eq:homotopy} 不是 H375 最终的非光滑评价
+目标，只是已有 checkpoint 的初始化工具，故必须单独披露。
+
+\chapter{H375 完整链条与 checkpoint provenance}
+
+\section{流程总览}
+图 \ref{fig:flow} 用颜色区分初始化、正 $\mu$ 同伦和 exact 尾部。箭头表示“下一阶段
+读取上一阶段坐标文件”，不是把各阶段的 objective 直接相加。
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+  stage/.style={draw,rounded corners=2pt,align=center,text width=3.25cm,
+                minimum height=0.86cm,font=\small,inner sep=3pt},
+  arr/.style={-{Latex[length=2mm]},line width=0.65pt},
+  node distance=0.65cm and 0.48cm
+]
+\node[stage,fill=softblue,draw=stageblue] (raw) {fresh raw\\center--Gaussian\\$53.2148$M / $99.966\%$};
+\node[stage,fill=softblue,draw=stageblue,right=of raw] (seed) {H219 HPWL seed\\Adam, $\lambda=0$\\$43.0348$M / $96.056\%$};
+\node[stage,fill=softpurple,draw=stagepurple,right=of seed] (coarse) {H219 coarse\\128$\times$128 DCT\\handoff $60.6175$M / $71.708\%$};
+\node[stage,fill=softpurple,draw=stagepurple,right=of coarse] (fine) {H221 fine\\512$\times$512\\selector $109.426$M / $7.752\%$};
+\draw[arr] (raw)--(seed); \draw[arr] (seed)--(coarse); \draw[arr] (coarse)--(fine);
+
+\node[stage,fill=softorange,draw=stageorange,below=1.05cm of raw] (r252) {H252\\15\% exact recovery\\$94.5485$M / $15\%$};
+\node[stage,fill=softorange,draw=stageorange,right=of r252] (bridge) {H253--H254\\bridge + retighten\\$89.5493$M / $6.557\%$};
+\node[stage,fill=softgreen,draw=stagegreen,right=of bridge] (polish) {H255--H257\\7\% exact polish\\$87.1195$M / $7\%$};
+\node[stage,fill=softgreen,draw=stagegreen,right=of polish] (assign) {H372\\surplus-only cuts\\$93.7055$M / $2.306\%$};
+\draw[arr] (fine.south) |- (r252.north); \draw[arr] (r252)--(bridge)--(polish)--(assign);
+
+\node[stage,fill=softgreen,draw=stagegreen,below=1.05cm of assign] (rec) {H372 recovery $\times10$\\exact candidates\\$86.1896$M / $7\%$};
+\node[stage,fill=softorange,draw=stageorange,left=of rec] (swap) {H375 exchange $\times5$\\equal-shape, net-aware\\$85.9993$M / $7\%$};
+\draw[arr] (assign.south)--(rec.north); \draw[arr] (rec)--(swap);
+\node[draw=none,below=0.18cm of coarse,font=\footnotesize,text=stagepurple]
+  {静电辅助初始化（正 $\mu$）};
+\node[draw=none,below=0.18cm of bridge,font=\footnotesize,text=stagegreen]
+  {exact 非光滑尾部（$\mu=0$）};
+\end{tikzpicture}
+\caption{H375 的坐标继承链。每个框中的指标均为该 checkpoint 的 exact audit；H221 的
+正 $\mu$ 分支和 H252 之后的 exact 尾部被明确分色。}
+\label{fig:flow}
+\end{figure}
+
+\section{输入输出关系}
+\begin{table}[H]
+\centering
+\caption{关键 checkpoint 的输入、操作和输出。}
+\label{tab:provenance}
+\small
+\begin{tabularx}{\textwidth}{>{\raggedright\arraybackslash}p{1.45cm} >{\raggedright\arraybackslash}p{3.55cm} >{\raggedright\arraybackslash}X >{\raggedright\arraybackslash}p{2.75cm}}
+\toprule
+阶段 & 输入坐标 & 核心操作 & 输出坐标/选择规则\\
+\midrule
+raw & raw benchmark \texttt{adaptec1.pl} & fresh center--Gaussian，seed 219，$\sigma=0.001$ & raw 初始状态\\
+H219 seed & raw fresh & HPWL-only Adam，200 updates，density scale 0 & \texttt{global.pl}\\
+H219 coarse & H219 seed & 128 网格，正 $\mu$ DCT Poisson 同伦，24$\times$50 steps & 读取 row 1100\\
+H221 fine & H219 row 1100 & 512 网格，正 $\mu$ 衰减；$\lambda$ 在 row 60 激活 & row 182 最低 overflow checkpoint\\
+H252--H257 & H221 selected & exact breakpoint、axis、compact、net-block；15\% band 后 retighten & H257 \texttt{global.pl}\\
+H372 assign & H257 \texttt{last.pl} & fixed-aware position-seeded surplus-only recursive cuts & \texttt{bisect/last.pl}\\
+H372 recovery & H372 assignment & exact node/group candidates，7\% cap，10 sweeps &
+\texttt{recovery10/}\allowbreak\texttt{last.pl}\\
+H375 & H372 recovery10 & 同宽高节点的 net-aware identity exchange，5 sweeps & 最终 \texttt{run/global.pl}\\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{阶段结果总表}
+表 \ref{tab:trajectory} 列出绘图脚本从 CSV 读取的完整 checkpoint 轨迹。由于 H252--H375
+每一行都是继承坐标后的 exact operator event，不能把它们误读成同一 Adam run 的连续迭代。
+
+\begin{longtable}{p{1.35cm}p{2.45cm}r r p{5.6cm}}
+\caption{H375 完整链条的 exact checkpoint 轨迹。HPWL 单位为 M，overflow 为百分数。}\label{tab:trajectory}\\
+\toprule
+阶段 & checkpoint & HPWL (M) & overflow (\%) & 备注\\
+\midrule
+\endfirsthead
+\multicolumn{5}{c}{\tablename\ \thetable{}（续）}\\
+\toprule
+阶段 & checkpoint & HPWL (M) & overflow (\%) & 备注\\
+\midrule
+\endhead
+\midrule
+\multicolumn{5}{r}{续下页}\\
+\endfoot
+\bottomrule
+\endlastfoot
+初始化 & raw fresh & 53.214813 & 99.966213 & center--Gaussian raw benchmark initialization\\
+H219 & HPWL seed & 43.034762 & 96.056285 & 200 Adam updates，$\lambda$ 实际无效（scale 0）\\
+H219 & coarse row 1100 & 60.617468 & 71.707837 & 128$\times$128 正 $\mu$ 同伦 handoff\\
+H221 & fine start & 60.618692 & 77.650357 & 512$\times$512 初始 exact audit\\
+H221 & selector row 182 & 109.425511 & 7.751547 & positive-$\mu$ 分支最低 overflow\\
+H252 & audit & 109.425511 & 7.803537 & 重新审核的微小 provenance 差异\\
+H252 & sweep 1 & 97.813945 & 14.999745 & 15\% relaxed exact recovery\\
+H252 & sweep 2 & 94.548507 & 14.999997 & 15\% band endpoint\\
+H253 & row 80 & 86.241998 & 13.891233 & moderate exact bridge\\
+H254 & selected row 99 & 89.549340 & 6.556721 & strong retightening\\
+H255 & sweep 1 & 88.064828 & 6.999984 & 7\% exact candidate polish\\
+H255 & sweep 2 & 87.567244 & 6.999999 & 7\% exact candidate polish\\
+H255 & sweep 3 & 87.317935 & 6.999977 & 7\% exact candidate polish\\
+H255 & sweep 4 & 87.178874 & 7.000000 & 7\% exact candidate polish\\
+H257 & sweep 5 & 87.119465 & 6.999958 & fifth exact node sweep\\
+H372 & assignment & 93.705492 & 2.306362 & surplus-only hierarchical capacity assignment\\
+H372 & recovery 1 & 89.143747 & 6.999985 & exact slack spending\\
+H372 & recovery 2 & 87.641415 & 6.999963 & exact slack spending\\
+H372 & recovery 3 & 86.972538 & 6.999991 & exact slack spending\\
+H372 & recovery 4 & 86.632343 & 6.999971 & exact slack spending\\
+H372 & recovery 5 & 86.450273 & 6.999985 & exact slack spending\\
+H372 & recovery 6 & 86.343968 & 6.999999 & exact slack spending\\
+H372 & recovery 7 & 86.278326 & 7.000000 & exact slack spending\\
+H372 & recovery 8 & 86.234833 & 7.000000 & exact slack spending\\
+H372 & recovery 9 & 86.207181 & 6.999993 & exact slack spending\\
+H372 & recovery 10 & 86.189626 & 6.999990 & exact slack spending\\
+H375 & exchange 1 & 86.064268 & 6.999990 & equal-shape exchange\\
+H375 & exchange 2 & 86.025509 & 6.999990 & equal-shape exchange\\
+H375 & exchange 3 & 86.009906 & 6.999990 & equal-shape exchange\\
+H375 & exchange 4 & 86.002560 & 6.999990 & equal-shape exchange\\
+H375 & exchange 5 & \textbf{85.999318} & \textbf{6.999990} & final exact audit\\
+\end{longtable}
+
+\chapter{阶段一：fresh 初始化与 H219 HPWL seed}
+
+\section{初始化动机}
+DREAMPlace 论文观察到中心加小 Gaussian 噪声能够避免昂贵的 bound-to-bound 初始摆放。
+本链条遵循相同的初始化思想，但每次实验都从 raw \texttt{.pl} 重新生成坐标，不读取
+历史 \texttt{.eplace*.pl} 或 \texttt{.lg.pl}。对 H375，seed 为 219，噪声标准差与版图
+宽高的比例为 $10^{-3}$。因此初始单元集中在中心，exact movable overlap 很高：
+\[
+  W_0=53.214813\text{M},\qquad O_0=99.966213\%.
+\]
+
+\section{HPWL-only seed}
+第一阶段只令 $\lambda E_{\rm ex}=0$，采用 Adam 和式 \eqref{eq:epshpwl} 的 HPWL
+epsilon-active 方向。密度仍被 exact 计算和记录，但不进入坐标更新。200 次更新后
+\[
+  53.214813\text{M}\longrightarrow43.034762\text{M},
+  \qquad
+  99.966213\%\longrightarrow96.056285\%.
+\]
+这一步的作用是让同一 net 的 pin 先形成较紧的拓扑，而不是建立容量可行性。结果也说明
+“只优化 HPWL”不能解决中心拥挤；如果此时强行使用逐节点 exact density gradient，很多单元
+仍处于同一 bin 内部，方向会为零。
+
+\section{收敛行为}
+图 \ref{fig:full} 左侧的初始化/HPWL 区间显示 HPWL 下降与 overflow 几乎脱钩。
+日志中的 \texttt{lambda\_control} 在该阶段增加，是控制器的记录值；由于 density weight
+scale
+为 0，物理坐标更新没有密度力。这一区别是解释 H219 seed 的必要条件。
+
+\chapter{\texorpdfstring{阶段二：H219 粗网格正 $\mu$ 同伦}{阶段二：H219 粗网格正 mu 同伦}}
+
+\section{设置}
+H219 读取 H219 seed，在 128$\times$128 网格上运行 24 个 50-step stage。初始控制参数
+为 $\mu_{\rm control}=5.36$，物理静电尺度约为 $0.443690$；exact overlap scale
+约为 $0.00674558$。$\mu$ 按 $0.99$ 衰减，并在稳定窗口中交给 adaptive controller；
+lambda step 为 15、最大 control 为 150，anchor weight 为 $10^{-4}$。每个 iteration
+仍计算 exact rectangle overlap 作为日志指标，但早期主要坐标方向来自式 \eqref{eq:electro}。
+
+\section{结果和物理解释}
+粗网格初始状态的 exact audit 为
+\[
+  W_{\mathrm{coarse},0}=43.034762\text{M},\qquad
+  O_{\mathrm{coarse},0}=94.7725\%.
+\]
+row 0 的细节见 \texttt{homotopy\_metrics.csv}。静电场提供跨 bin 的长程排斥，使 overflow
+逐步降到 row 1100 的 $71.707837\%$；与此同时 HPWL 上升至 $60.617468$M。
+该变化不是“平方 overlap 梯度单独成功”，而是正 $\mu$ 场把大量中心单元整体搬向版图
+外侧。
+
+粗网格的 handoff 选在 row 1100，是为了把已产生的全局 spread 交给细网格，而不是把
+row 1199 的末端状态直接当作下一阶段。图 \ref{fig:homo} 左上给出完整粗网格轨迹，竖线
+标注了该 handoff。
+
+\chapter{阶段三：H221 细网格同伦与 selector 语义}
+
+\section{512 网格切换}
+H221 读取 H219 row 1100 坐标并重新建立 512$\times$512 fixed-macro occupancy。因为
+bin 尺寸骤减，exact rectangle/bin geometry 被重新计算，row 0 的 overflow 回升到
+$77.650357\%$，HPWL 为 $60.618692$M。这一跳是分辨率改变造成的 exact metric 变化，
+不是坐标合法化。
+
+参数为 $\mu_{\rm control}=964$、$\mu$ decay $=0.99$、electrostatic gradient scale
+$=0.0979419$、overlap scale $=0.000925412$、lambda step $=520$、lambda maximum
+$=1950$、initial anchor weight $=10^{-5}$。H221 的 $\lambda$ 在 iteration 0--59
+保持为 0；iteration 60 开始由 adaptive controller 激活。图 \ref{fig:homo} 右下显示
+在 overlap term 被禁用的早期，overflow 仍随 electrostatic term 明显下降。
+
+\section{row 182 checkpoint}
+正 $\mu$ 分支在 row 182 达到日志中的最低 exact overflow：
+\[
+  W_{182}=109.425511\text{M},\qquad O_{182}=7.751547\%.
+\]
+它尚未达到 7\%，但已进入后续 exact recovery 可处理的狭窄容量带。继续运行时，HPWL
+下降而 overflow 回升；row 349 已为 $96.3050$M / $13.1115\%$ 左右。因此 selector
+选择 row 182，而不是把末端 HPWL 较小的状态当作密度可行点。
+
+\section{\texorpdfstring{restore 与 $\mu=0$ 的事实}{restore 与 mu=0 的事实}}
+在 row 350，程序恢复 row 182 的坐标，然后把物理 $\mu$ 强制为 0。row 351 的首次
+纯 $\mu=0$ 更新立即变成 $107.8691$M / $16.8234\%$；row 399 为 $92.8575$M /
+$23.7449\%$。所以 H221 的 $7.751547\%$ 不是一条从 row 349 继续单调下降的纯
+non-smooth trajectory，而是“positive-$\mu$ 最低 overflow checkpoint + restore”。
+H252 重新读取该文件时得到 $7.803537\%$，存在约 $0.052$ 个百分点的重算差异；本文
+保留两套数字并在表 \ref{tab:trajectory} 中标明 provenance。
+
+\chapter{阶段四：H252--H257 的 exact 非光滑尾部}
+
+\section{H252：15\% relaxed exact recovery}
+H252 从 H221 selector 开始，先把 overflow cap 放宽到 15\%，以便恢复因 spread 产生的
+HPWL 拓扑。候选包括 axis-separated displacement、breakpoint oracle、compact direction、
+node move 和最多 16 节点的 net-connected density direction。每个 node 或 group move
+都在临时 occupancy 上计算
+\[
+ \Delta W=W(z+\Delta z)-W(z),\qquad
+ \Delta O=O(z+\Delta z)-O(z),
+\]
+并在 exact cap 下接受。两轮 sweep 的结果为
+\[
+ 109.425511\text{M}/7.803537\%
+ \rightarrow97.813945\text{M}/14.999745\%
+ \rightarrow94.548507\text{M}/14.999997\%.
+\]
+此阶段的核心不是修改 density 函数，而是允许暂时使用 15\% slack，让 net-relative
+geometry 有机会恢复。
+
+\section{H253：moderate exact bridge}
+H253 在 512 网格上使用 Adam，density weight scale $0.5$、net-batch weight 1、
+step fraction $0.002$。前向 density 仍是式 \eqref{eq:excess}，\texttt{density\_epsilon}=0；
+net-batch 仅作为共享方向的附加搜索项，不改变目标定义。row 80 的 exact endpoint 为
+\[
+  W=86.241998\text{M},\qquad O=13.891233\%.
+\]
+这是一个短桥接阶段：它把 relaxed band 中的 HPWL 继续压低，但不强行把 overflow
+一次推到 7\%。
+
+\section{H254：strong retightening}
+H254 将 density weight scale 提高到 4.75，step fraction 降到 $0.001$，保持 net-batch
+weight 1。按照 exact checkpoint 选择规则，row 99 为较好的 retightening 状态：
+\[
+  W=89.549340\text{M},\qquad O=6.556721\%.
+\]
+HPWL 相对 H253 暂时上升，是用容量压力换取进入 7\% band；该阶段仍没有静电项、WA/LSE
+或平滑 density field。
+
+\section{H255/H257：7\% cap 下的 node polish}
+H255 固定 $O\le0.07$，进行四轮 exact node-wise recovery；H257 再做第五轮。候选来自
+epsilon-active HPWL、axis steps、exact bin-boundary breakpoints、net centroid 和
+support centroid compact directions。接受条件为
+\begin{equation}
+  \Delta W<0,
+  \qquad O(z+\Delta z)\le0.07+\tau,
+  \label{eq:feasible_accept}
+\end{equation}
+并在当前超过 cap 时要求 exact overflow 不增加。结果为
+\[
+\begin{aligned}
+  89.549340\text{M}/6.556721\%
+  &\rightarrow88.064828\text{M}
+   \rightarrow87.567244\text{M}\\
+  &\rightarrow87.317935\text{M}
+   \rightarrow87.178874\text{M}\\
+  &\rightarrow\boxed{87.119465\text{M}/6.999958\%}.
+\end{aligned}
+\]
+H257 是后续 H372 的输入。这里的“恢复”是 exact candidate search，而不是把零梯度替换
+成固定非零导数；breakpoint proposal 只是优化器层的搜索方向，所有提交仍由式
+\eqref{eq:hpwl} 和式 \eqref{eq:overflow} 审核。
+
+\chapter{阶段五：H372 hierarchical capacity assignment}
+
+\section{为什么需要 assignment}
+H257 已在 7\% band，但很多节点仍以局部碎片方式占据过载 bin。继续逐节点移动时，
+exact overlap 的 active set 过于稀疏；如果允许长距离任意跳转，HPWL 会发生不可逆的
+topology debt。H372 因此把容量分配提升到版图区域层级，并只移动每个 cut 两侧真正超出
+容量的边界 surplus。
+
+\section{位置 seeded 的递归 cut}
+在一个递归区域 $Q$ 内沿较长轴切成 $Q_L,Q_R$。固定宏感知容量记为 $C_L,C_R$，当前
+可移动面积为 $A_L,A_R$。位置 seeded 意味着节点先按其当前坐标归属一侧，不做全局 axis-rank
+或 Hilbert 重排。若 $A_L>C_L$，只从靠近 cut 的边界节点中取最小前缀 $T$，使
+\begin{equation}
+ A_L-\sum_{i\in T}a_i\le C_L,
+ \qquad
+ A_R+\sum_{i\in T}a_i\le C_R.
+ \label{eq:surplus}
+\end{equation}
+同理处理右侧。节点在叶区内使用 nearest-capacity 和 HPWL-guided 选择；固定宏不会被
+移动，也不被当作普通 movable node。该策略的要点是“保留原有 side topology，只搬 cut
+边界的必要面积”，而不是把所有节点均匀铺满整个版图。
+
+\section{H372 assignment 结果}
+配置为 512$\times$512、40 threads、leaf bins 8、degree limit 32、FM pass 1、无
+axis pre-map。共产生 5833 splits、5834 leaves、最大递归深度 65。一次 assignment
+把
+\[
+ 87.119465\text{M}/6.999958\%
+  \longrightarrow93.705492\text{M}/2.306362\%.
+\]
+HPWL 的暂时上升是有意的：assignment 先建立显式容量 slack，再将该 slack 交给 exact
+recovery 使用。图 \ref{fig:tail} 的 assignment 标注清楚显示了这一“先降 overflow、
+后花 slack 恢复 HPWL”的事件。
+
+\chapter{阶段六：H372 exact recovery 与 H375 exchange}
+
+\section{H372 recovery 的候选机制}
+从 assignment checkpoint 出发，H372 recovery10 做十轮 exact recovery。每轮依次尝试：
+\begin{enumerate}
+  \item node-wise epsilon-active HPWL 方向和轴分离步长；
+  \item exact bin-boundary breakpoint；
+  \item compact/support-centroid 方向；
+  \item degree $\le16$、最多 8 节点的 net-connected rigid/shared density block；
+  \item 对每个临时 node/group move 进行 exact HPWL、exact overflow 和 fixed-capacity 审核。
+\end{enumerate}
+若当前状态已在 7\% cap 内，则候选不能使式 \eqref{eq:overflow} 超过 cap；若当前状态
+超过 cap，则候选还需降低 exact overflow。这样做允许非局部但仍可审计的 net-aware group
+方向，避免把 density pseudo-gradient 直接冒充模型梯度。
+
+十轮轨迹为
+\[
+\begin{aligned}
+  93.705492&\rightarrow89.143747\rightarrow87.641415\rightarrow86.972538\\
+  &\rightarrow86.632343\rightarrow86.450273\rightarrow86.343968\\
+  &\rightarrow86.278326\rightarrow86.234833\rightarrow86.207181\\
+  &\rightarrow86.189626\ \text{M},
+\end{aligned}
+\]
+末端 overflow 始终在 $6.999990\%$ 附近。前几轮收益较大，后几轮进入 diminishing
+returns，说明 7\% band 内的主要损失已经是早期容量 assignment 造成的拓扑代价。
+
+\section{H375 等形状交换}
+H375 只在相同 $(w,h)$ 的节点之间交换坐标中心。若节点 $i,j$ 形状相同，交换前后对任意
+bin $b$ 的总面积为
+\[
+ a_{ib}(p_i)+a_{jb}(p_j)
+ =a_{jb}(p_i)+a_{ib}(p_j),
+ \]
+所以
+\begin{equation}
+ u_b^{\rm after}=u_b^{\rm before},
+ \qquad O^{\rm after}=O^{\rm before},
+ \label{eq:swapinvariant}
+\end{equation}
+在浮点容差内严格成立。交换是否接受只由涉及节点 incident nets 的精确 HPWL delta
+决定；net-aware 候选半径为 64，候选数 32，exact shortlist 16，degree limit 1000。
+因此 H375 是 density-neutral 的拓扑 polish，不是新的 density model。
+
+五轮分别接受 8064、3415、1651、812、429 次交换，总计 14,371 次，得到
+\[
+ 86.189626\text{M}\rightarrow86.064268\rightarrow86.025509
+ \rightarrow86.009906\rightarrow86.002560
+ \rightarrow\boxed{85.999318\text{M}},
+\]
+overflow 从 $6.99999030053\%$ 到 $6.99999030053\%$ 不变。单独看，交换只贡献约
+$0.190308$M（$0.221\%$）的 HPWL 改善；它不能弥补从 H221 到 H375 的主要 topology debt。
+
+\chapter{收敛曲线与轨迹分析}
+
+\section{完整 checkpoint 曲线}
+图 \ref{fig:full} 同时绘出 exact HPWL 和 exact overflow。背景色对应流程阶段，水平虚线
+分别是 DREAMPlace a1 HPWL 基线 $73.22$M 和 7\% overflow 目标。曲线揭示三个事实：
+\begin{enumerate}
+  \item H219 seed 先改善 HPWL，但中心拥挤使 overflow 仍接近 100\%。
+  \item H219/H221 正 $\mu$ 同伦承担了主要的全局 spread；fine selector 以较高 HPWL
+        换取约 7.75\% overflow。
+  \item H372 assignment 形成明显的“HPWL 上跳、overflow 下跳”事件，随后 H372 recovery
+        和 H375 exchange 只在窄 band 内逐步收回 HPWL。
+\end{enumerate}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig_full_chain_convergence.pdf}
+\caption{H375 完整继承 checkpoint 曲线。上图为精确 HPWL，下图为精确 overflow；阶段
+背景、基线、7\% 目标及关键 checkpoint 均已标注。}
+\label{fig:full}
+\end{figure}
+
+\section{同伦细节和力项归因}
+图 \ref{fig:homo} 给出 H219 粗网格、H221 细网格 selector、$\mu/\lambda$ 控制以及
+归一化梯度项。H221 的竖线分别位于 row 60（lambda 激活）、row 182（最低 overflow）和
+row 350（恢复并强制 $\mu=0$）。图中 row 351--399 的紫色虚线是已记录的纯 $\mu=0$
+trial，而不是被选作 H252 输入的状态。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig_homotopy_detail.pdf}
+\caption{H219/H221 同伦的详细日志轨迹。右上图区分正 $\mu$ branch、被拒绝的后续 branch
+和 restore；右下图显示早期 overlap term 为零时，overflow 仍由 electrostatic term
+下降。}
+\label{fig:homo}
+\end{figure}
+
+\section{exact 尾部曲线}
+图 \ref{fig:tail} 放大 H252--H375。H252 的 15\% topology-recovery band 允许 HPWL
+从 109.43M 降到 94.55M；H253/H254 交替进行 topology bridge 和容量 retightening；
+H372 surplus-only assignment 再次牺牲 HPWL 以创造 capacity slack；H372 recovery 和
+H375 exchange 最终回到 7\% band。该图支持“容量分配是主导机制，等形状交换是小幅 polish”
+的因果解释。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig_exact_tail.pdf}
+\caption{H252--H375 exact 尾部轨迹。上图为 HPWL，下图为 overflow；15\% relaxed band、
+7\% target、surplus-only assignment 和每个关键 endpoint 均已标注。}
+\label{fig:tail}
+\end{figure}
+
+\chapter{运行时间、迭代和复现审计}
+
+\section{时间口径}
+论文 Table II 在 40-core Intel E5-2698 v4 上报告 adaptec1 GP 为 67 s，因此挑战门槛
+取 134 s。本机早期 H219--H257 checkpoint 运行使用 16 threads，H372/H375 使用 40
+threads；不同线程数和不同硬件意味着这里不能声称严格的同机 speedup。为避免把增量时间
+误当端到端时间，本报告按 checkpoint handoff 累加：
+\begin{equation}
+\begin{aligned}
+  T_{\rm full}
+  &=5.800+64.440+19.889+8.740+4.911+7.614\\
+  &\quad+19.090+3.288+2.059+62.942+37.625\\
+  &=236.398\text{ s}.
+\end{aligned}
+ \label{eq:runtime}
+\end{equation}
+其中 H221 使用 row-350 handoff 的 19.889 s；完整 H221 selector 进程 wall time 为
+22.843 s。若把完整进程和所有文件 I/O 均纳入，端到端估计约为 239.35 s，结论不会改变。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig_runtime_breakdown.pdf}
+\caption{H375 阶段时间 waterfall。虚线为论文 67 s 与两倍门槛 134 s；图中同时解释了
+为什么历史记录中的约 103 s 只能代表 H257 之后的增量链，不能代表从 raw 初始化开始的
+完整运行。}
+\label{fig:runtime}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\caption{H375 各阶段的 checkpoint-handoff 时间账本。}
+\label{tab:runtime}
+\small
+\begin{tabular}{p{5.1cm}r r p{4.0cm}}
+\toprule
+阶段 & 时间 (s) & 累计 (s) & 口径\\
+\midrule
+H219 HPWL seed & 5.800 & 5.800 & 16 threads，Adam\\
+H219 coarse 至 row 1100 & 64.440 & 70.240 & 16 threads，正 $\mu$ DCT\\
+H221 fine 至 restore & 19.889 & 90.129 & row-350 handoff；完整进程 22.843 s\\
+H252 cap 15\% & 8.740 & 98.869 & exact recovery\\
+H253 bridge & 4.911 & 103.780 & Adam bridge\\
+H254 retighten & 7.614 & 111.394 & Adam retighten\\
+H255 polish & 19.090 & 130.483 & 四轮 exact recovery\\
+H257 polish & 3.288 & 133.772 & 第五轮 exact recovery\\
+H372 assignment & 2.059 & 135.831 & 40 threads，surplus-only cuts\\
+H372 recovery $\times10$ & 62.942 & 198.773 & 40 threads，exact candidates\\
+H375 exchange $\times5$ & 37.625 & \textbf{236.398} & 40 threads，equal-shape\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{迭代与 sweep 口径}
+H219 seed 使用 200 个 Adam update；H219 coarse 的 handoff index 为 1100（完整日志到
+1199）；H221 selector process 到 row 350（完整日志到 399）。H253 和 H254 分别记录到
+row 80 和 selected row 99。H252、H255、H257、H372 recovery、H375 exchange 则是
+exact operator sweeps，每轮包含大量临时候选和 exact audits，不应伪装成同一种“梯度迭代”。
+如果只累加 nominal GP update indices，到 H254 约为
+\[
+ 200+1100+350+80+99=1829<5000,
+\]
+而 exact 尾部另有 $2+4+1+10+5=22$ 个 sweep。该双重账本比把每个 candidate move 都算成
+一次 optimizer iteration 更可复现。
+
+\section{数据和复现命令}
+图表由
+\url{D:/codex_project/HUAWEI_EDA/epsilon-active/report/h375/figures/gen_h375_figures.py}
+生成，输入文件包括：
+\begin{itemize}
+  \item \url{experiments/h219_a1_hpwl_seed/global_metrics.csv}；
+  \item \url{experiments/h219_a1_coarse/homotopy_metrics.csv}；
+  \item \url{experiments/h221_a1_fine/homotopy_metrics.csv}；
+  \item \url{experiments/h252_a1_relaxed2_net_recovery/recovery_metrics.csv}；
+  \item \url{experiments/h253_a1_relaxed2_bridge80/global_metrics.csv}；
+  \item \url{experiments/h254_a1_relaxed2_strong475/summary.txt}；
+  \item \url{experiments/h255_a1_relaxed2_four_node_polish/recovery_metrics.csv}；
+  \item \url{experiments/h257_a1_fifth_node_line4/recovery_metrics.csv}；
+  \item \url{experiments/h372_a1_surplus_only_no_axis_map/bisect/bisection_metrics.csv}；
+  \item \url{experiments/h372_a1_surplus_only_no_axis_map/recovery10/recovery_metrics.csv}；
+  \item \url{experiments/h375_a1_surplus_recovery10_exchange/run/swap_recovery_metrics.csv}。
+\end{itemize}
+在报告目录下重新生成图表的命令为：
+\begin{verbatim}
+python figures/gen_h375_figures.py
+\end{verbatim}
+使用指定 TeX Live 2023 编译：
+\begin{verbatim}
+D:\latex\101\texlive\2023\bin\windows\xelatex.exe ^
+  -interaction=nonstopmode -halt-on-error ^
+  -output-directory D:\codex_project\HUAWEI_EDA\epsilon-active\report\h375 ^
+  D:\codex_project\HUAWEI_EDA\epsilon-active\report\h375\h375_technical_report.tex
+\end{verbatim}
+
+\chapter{讨论：哪些机制真正有效}
+
+\section{容量下降的主导机制}
+从轨迹和消融证据看，H375 的 overflow 下降不是由单一的 Adam density gradient 完成的。
+主要贡献按作用层次可归纳为：
+\begin{enumerate}
+  \item H219/H221 的正 $\mu$ electrostatic continuation 提供跨大量 fine bins 的长程
+        spread，克服了 raw center seed 的零梯度盆地；
+  \item H252--H254 的 15\% relaxed band 和 exact squared-excess bridge 恢复部分 net
+        topology，同时将密度逐渐接管；
+  \item H372 surplus-only hierarchical cuts 首次显式利用 fixed-macro-aware residual
+        capacity，只搬 cut-boundary surplus，产生了 $2.306\%$ overflow checkpoint；
+  \item H372 exact recovery 将 assignment 产生的容量余量花回 HPWL，回到 7\% band；
+  \item H375 equal-shape exchange 在不改变任何 bin occupancy 的条件下做最后的小幅线长
+        改善。
+\end{enumerate}
+因此，“最关键的容量机制”是 topology-preserving hierarchical capacity assignment，
+而“最关键的 raw basin 激活机制”是早期正 $\mu$ 长程 continuation。等形状交换是有效但
+非主导的 final polish。
+
+\section{为什么 HPWL 仍高于 baseline}
+H375 的 HPWL gap 主要在 fine-grid 可行化之前形成，而不是在最后 7\% band 内由零梯度
+造成。H221 把 $60.62$M 的粗网格状态扩散成约 $109.43$M 的 fine-grid checkpoint；
+H252--H257 虽恢复到 $87.12$M，H372 assignment 又暂时升至 $93.71$M。后续 exact
+recovery 和 exchange 只能在不超过 7\% 的窄可行带内移动，不能重新构造已经被 cut 分配
+改变的全局 net topology。单纯增大 lambda、延长 node sweep 或扩大交换半径，会进一步
+消耗 HPWL，而不会消除这个早期 topology debt。
+
+\section{零梯度问题的边界}
+若节点矩形严格位于单一 bin 内，exact overlap 在该局部区域是常数，真实局部次梯度确实
+可以为零。以下做法被允许作为优化器层的候选生成器，但不被称为真实次梯度：
+\begin{itemize}
+  \item exact breakpoint oracle：计算到相邻 bin 边界的有限位移；
+  \item net-aware shared direction：对同一 net 的节点共享刚性或受限弹性方向；
+  \item exact finite directional audit：以有限候选步长直接比较 $\Delta O$ 和 $\Delta W$；
+  \item controlled noise：仅在 zero-gradient 节点上提出可审计的边界候选。
+\end{itemize}
+这些方向不修改式 \eqref{eq:occupancy}--\eqref{eq:overflow}，最终接受仍由 exact objective
+审核。H405--H410 的单机制实验也显示，breakpoint、net-share 和 finite oracle 能改善
+局部搜索，却不能独立把 raw overflow 从约 100\% 送到可行域；因此它们应作为 assignment
+之后的 recovery operator，而不是容量桥本身。
+
+\section{网格分辨率和固定宏}
+细网格提高了 occupancy 解析度，但同时增加了 active-set 断点数量和零梯度区域。简单地
+把 128 网格坐标一次性切换到 512 网格，会产生 7.75\% 的 fine-grid overflow 跳变；H221
+的分阶段 handoff 只能缓解，不能消除这一分辨率差异。未来若要进一步改善，应该在每个
+分辨率上执行 exact capacity assignment，并把 fixed macro occupancy 和 active bins 显式
+prolongate，而不是只复制 electrostatic field。
+
+\chapter{局限性与后续工作}
+
+\section{当前结果的限制}
+\begin{enumerate}
+  \item H375 只在 adaptec1 上完成；a2--a4 尚未获得相同质量和 runtime 证据，不能外推。
+  \item 完整链条包含正 $\mu$ 静电辅助，若挑战解释为全阶段禁止静电，则需重新设计 raw-to-
+        capacity continuation。
+  \item H375 的 $17.453\%$ HPWL 劣化超过 $1\%$ 门槛；$236.40$ s 也超过 $134$ s。
+  \item 所有 overflow 数字是 GP 连续矩形的密度审计，不代表无重叠的合法化版图。
+  \item 16-thread 与 40-thread 阶段混用，运行时间只作本实验的 checkpoint 账本，不作跨硬件
+        的性能声明。
+\end{enumerate}
+
+\section{最有价值的下一步}
+在保持最终 exact non-smooth model 的前提下，优先级应为：
+\begin{enumerate}
+  \item 设计不依赖静电的多分辨率 exact capacity continuation：粗层只生成容量目标，细层
+        采用 fixed-macro-aware residual capacity 和 topology-preserving cut；
+  \item 在 cut assignment 中加入全局 exact HPWL trust-region 和 net-connected commodity
+        的联合 destination assignment，避免一次性产生不可逆 topology debt；
+  \item 只在 assignment 后启用 breakpoint/net-share/finite-oracle recovery，并对每个
+        candidate 做 exact line search；
+  \item 用同一 40-thread 口径重新测量，减少早期 16-thread handoff 的时间不确定性。
+\end{enumerate}
+这些方向改进的是搜索路径，而不是把 overlap 函数平滑化；最终报告指标仍应由式
+\eqref{eq:hpwl} 和式 \eqref{eq:overflow} 计算。
+
+\chapter{结论}
+
+本文已经把 H375 的完整坐标继承链、数学模型、控制策略、exact 尾部算子、收敛曲线和运行
+时间逐项记录。实验表明，H375 能在不合法化的情况下把 adaptec1 的精确 overflow 压到
+$6.999990\%$，并通过 H372 surplus-only assignment 与 H375 density-neutral exchange
+保持固定宏容量和 net-aware HPWL 审计。然而，最终 HPWL 为 $85.999318$M，比 DREAMPlace
+GP 基线高 $17.453\%$，完整链条约 $236.40$ s，也未通过两倍时间门槛。
+
+最重要的技术结论有两点。第一，raw center seed 的 extreme subgradient sparsity 不能
+靠普通逐节点 Adam 自行解决；需要长程 continuation 或显式 hierarchical capacity bridge
+激活新的 exact pieces。第二，breakpoint、net-aware batch 和 equal-shape exchange 可以
+作为优化器层的搜索方向，但它们不改变最终非光滑模型；真正决定 overflow 可行化的是
+fixed-macro-aware、surplus-only 的区域容量分配。后续工作必须在这一桥接阶段降低 topology
+debt，才能接近论文的 HPWL 质量和时间目标。
+
+\appendix
+\chapter{参数与审计文件索引}
+
+\begin{table}[H]
+\centering
+\caption{H375 链条的关键锁定参数。}
+\label{tab:params}
+\small
+\begin{tabular}{p{4.3cm}p{10.2cm}}
+\toprule
+参数组 & 数值/说明\\
+\midrule
+raw initialization & fresh center--Gaussian；seed 219；sigma ratio 0.001\\
+HPWL oracle & exact pin-offset max--min；$\epsilon=125$；active power 4\\
+density oracle & exact rectangle/bin overlap；512$\times$512 fine grid；target density 1\\
+fixed macro & immutable occupancy；除 \texttt{terminal\_NI} 外均扣减容量\\
+H219 coarse & 128$\times$128；24 stages$\times$50 steps；$\mu_{\rm control}=5.36$；decay 0.99\\
+H221 fine & 512$\times$512；8 stages$\times$50 steps；$\mu_{\rm control}=964$；lambda max 1950\\
+H252 & 15\% cap；2 sweeps；axis/breakpoint/compact/net-block\\
+H253 & density scale 0.5；net-batch weight 1；step 0.002\\
+H254 & density scale 4.75；net-batch weight 1；step 0.001；selected row 99\\
+H255/H257 & 4+1 exact sweeps；7\% cap；line-search candidates exact audited\\
+H372 assignment & surplus-only；leaf bins 8；no axis pre-map；40 threads\\
+H372 recovery & 10 sweeps；degree $\le16$；max 8-node blocks；7\% cap\\
+H375 exchange & 5 sweeps；radius 64；32 candidates；shortlist 16；equal shapes only\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\chapter{参考文献}
+\begin{thebibliography}{9}
+\bibitem{dreamplace}
+Y. Lin, Z. Jiang, J. Gu, W. Li, S. Dhar, H. Ren, B. Khailany, and D. Z. Pan,
+``DREAMPlace: Deep Learning Toolkit-Enabled GPU Acceleration for Modern VLSI Placement,''
+\emph{IEEE Transactions on Computer-Aided Design of Integrated Circuits and Systems},
+vol. 40, no. 4, pp. 748--761, 2021. DOI: 10.1109/TCAD.2020.3003843.
+
+\bibitem{eplace}
+J. Lu, P. Chen, C.-C. Chang, L. Sha, D. Z. Pan, and C. Y. Hsu,
+``ePlace: Electrostatics-Based Placement Using Fast Fourier Transform and Nesterov's Method,''
+\emph{ACM Transactions on Design Automation of Electronic Systems}, vol. 20, no. 2, 2015.
+
+\bibitem{ispd}
+C. J. Alpert, ``The ISPD2005 placement contest and benchmark suite,''
+in \emph{Proceedings of the ACM International Symposium on Physical Design}, 2005.
+
+\bibitem{challenge}
+华为 EDA 专题，\emph{第148期 -- EDA 专题第四期}，难题 5，项目约束与数据说明，2026。
+
+\bibitem{implementation}
+epsilon-active 独立实现，\url{D:/codex_project/HUAWEI_EDA/epsilon-active}，
+源代码模块：
+\texttt{hpwl.cpp}、\texttt{density.cpp}、\texttt{lambda\_controller.cpp}、
+\texttt{bisection.cpp}、\texttt{recovery.cpp} 和 \texttt{swap\_recovery.cpp}。
+\end{thebibliography}
+
+\end{document}

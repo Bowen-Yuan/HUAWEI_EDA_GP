@@ -1,0 +1,281 @@
+\documentclass[UTF8,a4paper,11pt]{ctexart}
+\usepackage{geometry}
+\geometry{margin=2.2cm}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{float}
+\usepackage{amsmath,amssymb}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=blue,urlcolor=blue}
+\title{epsilon-active：精确非光滑 HPWL 与矩形重叠密度全局布局框架}
+\author{实验报告}
+\date{2026年8月20日}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本文记录一个独立实现的 C++17/OpenMP 全局布局框架。目标函数严格使用带 pin offset 的
+精确 max--min HPWL，密度项严格使用矩形与整数网格 bin 的精确重叠面积；固定宏器件直接
+占用 bin 容量。epsilon-active 只改变活动次梯度方向，不改变任何目标值或审计指标。框架
+不包含静电模型、目标平滑、合法化、行/站点吸附或合法性检查，并支持多种优化器、最多 40
+线程、收敛曲线和布局动画。实验同时报告从 Bookshelf 初始位置的 H24 递归二分负结果，以及
+使用外部初始坐标进行精确 recovery 的探索性结果，明确区分两者的证据强度。
+\end{abstract}
+
+\section{问题与约束}
+挑战 5 的 overflow 用非光滑矩形重叠建模。对 bin $b$，固定宏占用为 $F_b$，可移动器件
+的精确占用为 $A_b(x)$，容量为 $C_b=\rho A_b^{\rm bin}-F_b$。报告中的 overflow 是
+\[
+  \frac{\sum_b \max(0,A_b(x)-C_b)}{\sum_b A_b^{\rm bin}}.
+\]
+所有矩形--bin 相交面积均由几何裁剪直接计算。固定宏不移动，\texttt{terminal\_NI} 不占用
+物理容量。HPWL 对每条 net 直接计算 pin offset 加入后的最大值减最小值；活动集合只用于
+选择次梯度方向。没有 WA/LSE、Moreau、静电势、Poisson/DCT 或其它平滑化。
+
+\section{框架实现}
+代码位于 \texttt{epsilon-active}。Bookshelf I/O、精确 HPWL oracle、精确 overlap oracle、
+epsilon-active、DreamPlace 风格自适应 lambda、Adam/AMSGrad/AdaGrad/Heavy-ball/SGD、精确
+回溯、等形状置换和递归容量二分均为独立模块。所有接受的 recovery 移动都重新审计精确
+HPWL 与精确 overflow；固定宏永远不进入 movable 集合。OpenMP 线程请求被限制在 40，本文
+实验使用本机 16 个逻辑线程。
+
+H24 在固定宏感知容量上递归沿长边切分矩形区域，使用确定性 FM 风格 cut-net refinement，
+叶区内按连通性顺序映射到 Hilbert/容量加权锚点。该构造不改变目标定义，但用于检验“先保持
+超图连通性再满足容量”的假设。
+
+\section{实验设置}
+论文基线 HPWL 取 DREAMPlace 参考值：a1/a2/a3/a4 分别为 73.22M、82.22M、193.72M、
+174.08M；允许劣化 1\%，overflow 要求小于 7\%，迭代不超过 5000，运行时间不超过对应
+40-thread GP 时间的两倍（67/98/133/187 秒的两倍）。所有本地运行使用 16 线程，因此时间
+数字不宣称等价于 40-thread 硬件。
+
+\subsection{H24：clean-start 诊断}
+从 Bookshelf 的全零 movable 坐标开始，512x512 bin 的锁定 a1 诊断在 3.65 秒达到
+0.5946\% exact overflow，但 HPWL 为 817.219M。叶区 4--64、FM passes 4--20、平衡容差
+0.10--0.49 及纳入高阶网络的诊断仍为 747--836M HPWL。H24 的 recovery/swap 延续在
+61.91 秒达到 601.391M/6.9998\%，因此没有通过 400M 中间门槛。该负结果说明递归 cut-net
+目标和二维锚点映射仍存在结构性失配。
+
+H26 将每个递归 cut 的初始 side 改为当前节点中心所在的物理侧，再执行同一个容量约束 FM
+refinement。对非合法化 ePlace GP seed，a1 构造降至 219.7--220.6M HPWL 和 2.1--3.2\%
+overflow；20 次 recovery 与 10 次 swap 后为 164.553M/6.8998\%。然而同样设置在 a2/a3/a4
+分别为 182.513M、686.471M、627.534M，说明坐标保持只能部分缓解 seed 敏感性。H27 的独立
+x/y 容量 rank map 单独留下 62.2553\% overflow，和 H26 组合后为 220.269M/3.2757\%，
+因此不具备足够的二维 net 几何保持能力。
+
+H28 将源节点中心和固定宏感知的目标 bin 容量都按同一个整数 Hilbert 次序排序。锁定的 a1
+运行在 0.415 秒内达到 0.5409\% exact overflow，但 HPWL 从 41.510M 增至 497.956M，
+没有通过 150M 中间门槛。该结果排除了源/目标全局曲线实现不一致，却表明把拥挤 seed 所占的
+短曲线区间按全局累计容量拉伸到整张芯片会破坏二维网络几何；单一全局空间填充曲线不足以
+同时解决容量和连通性。
+
+H29 进一步把 H26 叶区内的源节点和目标 bin 都改为同一 Hilbert key，但匹配实验得到
+220.379M HPWL 和 3.2675\% overflow，略差于 H26 的 219.738M/3.1761\%。因此主要损失
+不来自源/目标曲线次序不一致，而来自递归区域分配及一维叶区 quantile 本身。
+
+H30 在每个小叶区内按器件面积降序，并选择离原坐标最近且有固定宏感知剩余容量的二维 bin。
+结果的 overflow 改善为 2.0809\%，但 HPWL 为 220.094M，仍未改善 H26。叶区内的容量
+规则不是主要瓶颈；节点进入哪个递归物理区域时，长程拓扑损失已经发生。
+
+H31 从同一非合法化 ePlace 坐标直接执行 H8 的八轮精确 excess transport，得到
+742.367M HPWL、19.4293\% overflow 和 9.42 秒。相对 H8 全零源坐标的 1,416.36M，
+HPWL 损失下降 47.6\%，说明源几何很重要；但逐器件撤离仍会拆散相连节点，未通过 400M
+中间门槛。
+
+H32 进一步组合最多 8 个节点的重边组排序，得到 706.182M HPWL、20.1267\% overflow
+和 9.323 秒。相对 H31 的 HPWL 仅改善 4.88\%，且 overflow 略微越过 20\% 中间门槛。
+原因是当前 group 只改变 contributor 顺序，组员仍独立选择目标；后续需要为连接组联合选择
+粗粒度目标容量区域。
+
+H33 让非单节点组的第一个成功目标成为持久二维锚点，后续组员只在锚点邻域内选择严格降低
+精确 overflow 的位置。锁定半径 16 得到 635.167M HPWL、18.9867\% overflow 和
+10.084 秒，相对 H32 改善 10.06\%，但没有达到预注册的 600.254M 门槛。探索半径
+4/8/32 的 HPWL 为 650.910M/645.046M/631.053M；半径 16 到 32 仅改善 4.11M，
+时间增加 5.54 秒，因此不继续扩大半径。结果支持共享目标区域，但首个组员仍是较弱的组锚代理。
+
+H34 用全组 incident-net target 的均值替代首个组员 target 进行锚点和局部候选排序，得到
+634.210M HPWL、19.0355\% overflow 和 9.919 秒，仅比匹配的 H33 改善 0.15\%，
+没有通过 5\% 预注册增益。由此停止 anchor score 调整，后续转向共享网络权重驱动的组成员构造。
+
+H35 按共享网络的 $w/(d-1)$ 权重贪心构造重边组。锁定组大小 8 得到 659.854M HPWL、
+19.2340\% overflow 和 9.723 秒，比 H33 反而差 3.89\%；探索组大小 2/4 分别为
+657.104M/645.686M，也没有超过 H33。因此 weighted membership 和组大小扫描均被否定。
+H29--H35 的外循环复盘发现这些方法共同把器件中心吸附到目标 bin 中心，会清除 ePlace seed
+的源 bin 内相对偏移；下一假设将保持源到目标 bin 的共同位移，并继续用精确 overlap oracle
+逐候选验收。
+
+H36 对每个候选采用“原中心加目标与源 bin 中心之差”的坐标，从而保持 bin 内偏移。锁定
+半径 16 得到 625.958M HPWL、16.8458\% overflow 和 10.140 秒，相对 H33 改善 1.45\%，
+但未通过 603.409M 门槛。探索半径 32 为 620.681M/16.6019\%/15.656 秒，相对匹配
+H33 也只改善 1.64\%。因此该几何修正确实有效但不是主导损失；下一步需要让连接组共享同一
+二维位移，而非仅独立保持各自 bin 内偏移。
+
+H37 在每轮让一个连接组共享首个成功成员的实际二维位移，后续成员越界或不能严格降低精确
+overflow 时直接跳过。八轮得到 597.238M HPWL、25.8840\% overflow 和 7.588 秒；
+HPWL 相对 H36 改善 4.59\%，但 overflow 未通过 20\% 中间门槛。十二轮为
+609.110M/24.4107\%/9.404 秒，说明纯刚性延续的密度收益很弱且损害线长。该结果表明刚性
+位移与独立 offset transport 分别偏向拓扑保持和容量疏散，后续应采用预注册的分阶段组合。
+
+H38 固定前八轮刚性、后四轮独立 offset cleanup，结果为 609.939M HPWL、24.2978\%
+overflow 和 9.465 秒，未恢复 20\% 门槛。探索 4+8 与 1+11 仍为 24.0942\% 和
+23.4760\% overflow，而十二轮全独立对照可达 16.2019\%。因此失败不是 transition 未生效，
+而是刚性前缀产生了逐器件下降无法修复的容量碎片。当前组移动仍逐成员要求严格下降；下一结构
+方向应把整组位移合并为一次可回滚的精确 overlap 事务，允许单个中间成员为正但组总 delta 为负。
+
+H39 将同一位移的整组矩形变化在临时 occupancy 上顺序求值，并仅按组总 exact overflow
+delta 提交或完整回滚。锁定组大小 8 接受 92,305/94,771 次原子尝试，得到 509.126M HPWL、
+34.2600\% overflow 和 6.857 秒；HPWL 相对 H37 改善 14.75\%，但密度失败。组大小 4/2
+分别为 516.341M/33.3394\% 和 544.112M/30.5289\%，组 2 延长到十六轮仍只有
+561.603M/28.2426\%。约 95\% 的高接受率说明 rejected-group splitting 不是主因；后续应
+限制整组必须保留首成员一定比例的精确 density gain，否则回滚并仅执行首成员移动。
+
+H40 锁定要求整组保留首成员至少 50\% 的 exact overflow gain，不满足时回滚并进入独立
+offset fallback。结果接受 92,170/94,805 组、fallback 2,680 组，得到 522.060M HPWL、
+32.6484\% overflow 和 6.943 秒。比例 1.0 端点仍接受 91,460/94,817 组，仅改善到
+32.3168\% overflow，因此停止比例调节。根因是原子事务移动全局组的远端非 source 成员并将其
+本轮标记完成；下一步应只移动当前 overfull source 中同组的 active contributors。
+
+H41 将原子成员限制为当前 source 的精确矩形 contributors。锁定八轮接受
+64,463/65,948 个子组，得到 546.173M HPWL、28.3515\% overflow 和 8.006 秒；相对
+H39 改善 5.91 个 overflow 百分点且通过 600M 门槛，但未到 20\%。十六轮仅到
+553.817M/27.4672\%，与 ratio-1.0 fallback 组合也只有 556.759M/27.0688\%。因此
+source-active atomic 适合作为早期拓扑算子，后续应切换到完全独立的 offset capacity cleanup。
+
+H42 新增可验证的 atomic 轮数前缀：前四轮采用 H41，后八轮进入已有的独立 offset 路径。
+锁定运行接受 63,171/63,493 次原子尝试，得到 572.409M HPWL、25.3415\% overflow 和
+10.064 秒。HPWL 与时间通过中间门槛，但 overflow 距 20\% 仍差 5.34 个百分点；它也比
+十二轮全独立对照高 9.14 个百分点。99.49\% 的接受率说明问题不是原子组经常被拒，而是仅按
+总 overflow 下降会允许把较小 excess 搬到新目的 bin，形成后续独立下降无法消除的容量碎片。
+因此停止前缀轮数调节，下一步要求原子事务在每个触及 bin 上均不增加精确 overflow。
+
+H43 对每个 atomic trial 进一步要求所有 touched bin 的正 excess 均不增长，否则完整回滚并
+进入精确 individual fallback。锁定八轮得到 625.161M HPWL、16.8720\% overflow 和
+10.849 秒；密度通过 20\% 门槛，但线长未到 600M。新 guard 拒绝 58,482 次，atomic 仅接受
+3,500/62,136 次并 fallback 58,658 次，端点几乎复现 H36 全独立结果。这一结果确认目的 bin
+spill 是 atomic 密度 plateau 的原因，也说明只检查首成员选出的单一候选会清除组拓扑收益；
+后续应在显式 exact residual capacity 下为 source-active subgroup 搜索并分配多个目的候选。
+
+H44 为每个 source-active subgroup 试算最多八个目的地，并在所有可行项中按组 incident nets
+的精确 max-minus-min HPWL delta 选择。锁定运行评估 496,078 个 exact bids，其中 18,308
+可行，接受 7,086 组并救回 3,990 个首候选失败组；最终为 622.606M HPWL、16.8107\%
+overflow 和 11.486 秒。相对 H43 线长仅改善 2.555M，且未达到 610M 与 10,000 接受组的
+预注册门槛。候选可用性并非主导限制；下一步应让同一 source 的全部组在共同 occupancy
+snapshot 上生成 bids，再按精确 HPWL 价值竞争并在 live residual capacity 上复验提交。
+
+H45 在每个 source 的共同 occupancy snapshot 上批量生成 bids，按精确 HPWL delta 排序后在
+live capacity 上复验。497,424 次试算得到 172,652 个 snapshot-feasible bids，但只提交
+3,671/62,411 组；最终 624.363M HPWL、16.8309\% overflow、12.987 秒，比 H44 更差。
+这说明大量候选争用同一批稀缺目的容量，单次 greedy priority 不能解决冲突。严格
+componentwise-safe group assignment 因此关闭；下一方向应通过同形状 anchor 的精确
+density-neutral 身份交换改变 congested source 中需要被疏散的器件，再执行独立 exact transport。
+
+H46 在 transport 前对 source-active connected subgroup 执行同形状身份交换。每个完整交换
+均用包含 pin offset 和 net weight 的精确 max-minus-min HPWL 决定接受，并以完整 overlap
+oracle 审计密度不变量。锁定运行试算 226,128 个交换，接受 6,683 个、置换 29,560 个器件；
+HPWL 从 41.510168M 降至 41.497598M，overflow 在浮点输出上逐位保持
+96.8876491423\%。然而该阶段耗时 49.266 秒，随后八轮 H36 最终仅得到
+625.990M HPWL、16.7886\% overflow、59.744 秒。密度门槛通过，但 600M 线长与 20 秒
+门槛失败。因此关闭局部 connected-group transport/exchange，下一方向改为在 cell-level
+cleanup 前显式表示二维全局容量与位移代价。
+
+H47 在 $64\times64$ coarse grid 上建立固定宏容量感知的二维 L1 transport plan，并按完整
+incident-net 精确 HPWL delta 实现 offset-preserving 平移。1,871 条 flow edges 和 201,105
+次移动在 3.218 秒内把 coarse center-area overflow 从 94.8007\% 降至 0.5257\%。但
+$512\times512$ 精确矩形 overlap 仍为 76.2850\%，HPWL 为 530.789M；四轮 H36 后仅到
+522.926M/40.8354\%，总时间 8.537 秒。巨大 coarse/exact 差异说明 offset 平移把初始拥塞的
+fine-bin phase 复制到了许多 coarse sinks。下一步保留二维全局 flow，但在每个 sink 内用 live
+精确矩形容量和精确 HPWL 选择 fine anchors。
+
+H48 对每个 coarse-flow node 枚举其 sink 内全部 64 个 fine-bin centers，并以 live 精确矩形
+overflow 严格下降为接受条件。13,433,728 次 anchor 试算提交 200,915 次移动，在 6.804 秒内
+把精确 overlap 从 96.8876\% 降至 7.2900\%，验证 H47 的 phase-aliasing 诊断。随后四轮
+H36 仅需 5,053 次移动即达到 530.068M HPWL、5.21172\% overflow；总时间 9.595 秒、GP
+迭代数 1。H48 的预注册中间门槛全部通过，但 HPWL 仍为 a1 最终上限 73.9522M 的 7.17 倍。
+密度表示已不再是主瓶颈；下一步应在每个 source 内联合分配已预留的 coarse sink quotas，按
+精确 HPWL opportunity cost 处理匿名 flow 带来的拓扑破坏。
+
+\subsection{H25：外部初始坐标的探索性结果}
+H25 使用已有 \texttt{global-placement/ispd2005/*/*.lg.pl} 作为可选初始坐标，然后只运行
+本框架的精确 recovery 与等形状置换；程序没有执行合法化或合法性检查。该设置用于隔离
+“精确模型是否能保持好种子”这一问题，不能等同于 clean-start 端到端结果。
+
+\begin{table}[H]
+\centering
+\caption{H25 精确 oracle 结果。时间为 16 线程 wall time，迭代数为 GP 迭代数。}
+\begin{tabular}{lrrrrrr}
+\toprule
+数据集 & HPWL (M) & 基线 (M) & 劣化 & overflow & 时间 (s) & 迭代 \\
+\midrule
+adaptec1 & 72.7386 & 73.22 & -0.66\% & 6.9000\% & 18.15 & 1 \\
+adaptec2 & 81.4895 & 82.22 & -0.89\% & 4.9719\% & 22.07 & 1 \\
+adaptec3 & 192.479 & 193.72 & -0.64\% & 4.0422\% & 35.89 & 1 \\
+adaptec4 & 174.328 & 174.08 & +0.14\% & 2.3835\% & 34.82 & 1 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{收敛与可视化}
+图中曲线来自 exact recovery/swap CSV，而不是平滑代理。绿色区域表示 overflow 小于 7\%。
+每个数据集的布局 GIF 位于 \texttt{output/animations/}，收敛图的 PDF/PNG 位于
+\texttt{output/plots/}。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\linewidth]{../output/plots/adaptec1_convergence.pdf}
+\caption{adaptec1 的精确 HPWL 与精确 overlap recovery 轨迹。}
+\end{figure}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\linewidth]{../output/plots/adaptec2_convergence.pdf}
+\caption{adaptec2 的精确轨迹。}
+\end{figure}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\linewidth]{../output/plots/adaptec3_convergence.pdf}
+\caption{adaptec3 的精确轨迹。}
+\end{figure}
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\linewidth]{../output/plots/adaptec4_convergence.pdf}
+\caption{adaptec4 的精确轨迹。}
+\end{figure}
+
+\subsection{H81--H105：严格 \texttt{mu=0} 语义审计}
+H81 修正并锁定了同伦语义：overlap 的 epsilon 被强制为零，epsilon-active 只用于
+HPWL 的次梯度选择；最后一个 stage 的 \texttt{mu} 被强制写为 $0$，随后仅优化精确
+max-minus-min HPWL 与精确矩形 overlap。该严格路径在 H100 首次达到
+\(6.24086\%\) exact overflow，但 HPWL 为 316.025M。之后在同一 exact cap 内进行
+HPWL 次梯度 recovery、等形状 identity swap 与 incident-net assignment，H105 得到
+\(154.050\)M HPWL、\(6.24094\%\) overflow；overflow 在 swap/assignment 中逐位不变。
+因此 H105 满足 overflow 门槛，但尚未满足 a1 的 73.9522M HPWL 上限。该差距来自早期
+密度构造造成的拓扑损伤，而不是静电项残留或 overlap 平滑。H106 的 position-seeded
+recursive bisection 路径得到 170.935M/1.408\%，没有优于 H105。
+
+\begin{table}[H]
+\centering
+\caption{严格非光滑 clean-start 路径的 a1 审计。}
+\begin{tabular}{lrrr}
+\toprule
+阶段 & HPWL (M) & exact overflow & 说明 \\
+\midrule
+H81 同伦最终 stage & 62.115 & 82.9201\% & \texttt{mu=0}, overlap epsilon=0 \\
+H100 exact breakpoint & 316.025 & 6.24086\% & trust radius 64 \\
+H105 feasible recovery & 154.050 & 6.24094\% & exact cap + identity/assignment \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{结论与限制}
+精确非光滑模型、固定宏容量和 oracle 保护的 recovery 在高质量初始坐标上满足四个数据集
+的数值门槛；这验证了实现的目标/指标一致性和优化器可扩展性。另一方面，H24 clean-start
+结果远离论文基线，说明当前容量构造器不能替代一个高质量初始 GP。因而本文不把 H25 的
+外部 \texttt{.lg.pl} 锚点结果包装成从零开始的算法胜利。下一步应开发不依赖合法化的非光滑
+seed 构造或多尺度超图布局，并在相同的精确 oracle 下重新验证 a1--a4。
+
+\section*{可复现性}
+构建：\texttt{mingw32-make -j 16}；测试：\texttt{mingw32-make test}。报告使用指定的
+XeLaTeX 2023 编译。核心测试输出为 \texttt{all core tests passed}。
+
+\end{document}
