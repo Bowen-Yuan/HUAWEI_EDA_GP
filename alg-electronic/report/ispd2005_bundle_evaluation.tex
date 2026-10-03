@@ -1,0 +1,204 @@
+\documentclass[11pt,a4paper]{ctexart}
+\usepackage[margin=2.1cm]{geometry}
+\usepackage{amsmath,booktabs,array,longtable,graphicx,float,xcolor}
+\usepackage[hidelinks]{hyperref}
+\usepackage{caption}
+\usepackage{subcaption}
+\setlength{\parindent}{2em}
+\setlength{\parskip}{0.25em}
+\setlength{\emergencystretch}{2em}
+\graphicspath{{../research/bundle_hpwl/experiments/ispd2005_eight_benchmarks/}}
+
+\title{ISPD2005 八数据集 Bundle 全局布局评测\\
+\large 严格非光滑 HPWL + 静电密度模型}
+\author{HUAWEI\_EDA 项目实验报告}
+\date{2026 年 8 月 2 日}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本文在统一的 3000 步预算下，将已在 adaptec1 上调优的两切平面 bundle
+方法运行于 ISPD2005 的八个公开数据集。线长项始终采用严格非光滑
+HPWL，即每条网的 $\max x-\min x+\max y-\min y$；未采用 LogSumExp、
+weighted-average 或任何其他线长平滑。密度项采用基于网格的静电势模型，
+并由连续 guarded lambda 控制器调节。八组运行均成功完成并满足 10\% 的
+DREAMPlace 参考门槛，选中 overflow 为 6.410\%--7.162\%。实验同时表明，
+密度可行性比 HPWL 质量更容易跨实例迁移；初始化不一致以及固定 lambda
+尺度是当前主要限制。
+\end{abstract}
+
+\section{实验问题与硬约束}
+
+本轮实验回答两个问题：第一，adaptec1 上验证过的 bundle 方向能否在八个
+ISPD2005 数据集上稳定产生密度可行状态；第二，同一套优化器和 lambda
+策略是否具有跨规模的 HPWL 质量。所有实验固定以下约束：
+\begin{itemize}
+  \item HPWL 仅用严格 $\max-\min$ 次梯度，不做任何平滑；
+  \item 3000 次全局迭代，阶段长度为 150/100/150/fine；
+  \item bundle 大小 2、切平面间隔 5、prox 比例 2.0、当前切平面混合 0.50；
+  \item lambda 控制基线 0.060、恢复目标 0.0648、guard 间隔 25；
+  \item fine cooldown floor 为 0.25；每 50 步输出一次可视化快照。
+\end{itemize}
+
+\section{为什么采用 10\% overflow 参考门槛}
+
+DREAMPlace 论文的 Table II 只报告 HPWL 与运行时间，并没有给出最终 GP
+density overflow 的数值门槛。论文 Section III-F 中的 20\% 是启动全局布线
+与单元膨胀的条件，10\% 是每轮面积增量占总空白面积的上限，二者都不是
+最终可行性标准。DREAMPlace 官方仓库提交
+\texttt{6627f3327e6cc17d\allowbreak b7782c0b90073a49\allowbreak 8531ca3c} 的
+\texttt{params.json} 将 \texttt{stop\_overflow} 默认设为 0.1，并在
+\texttt{NonLinearPlace.py} 的停止逻辑中使用该值。因此本轮采用 10\%
+作为 DREAMPlace 引导的“保存最优状态”参考门槛。
+
+需要强调，两套 overflow 并不完全同义。DREAMPlace 的评价值由
+density-overflow 算子输出除以可移动单元总面积；本项目计算
+\[
+  \mathrm{overflow}=
+  \frac{\sum_b\max(A_b-C_b,0)}{A_{\mathrm{available}}},
+\]
+即各网格超容量面积之和除以可用面积。故 10\% 是操作性参考，而非严格
+可比的同一统计量。10\% 只改变 best-state 筛选；lambda 控制轨迹仍使用
+已验证的 6\% 基线和 6.48\% 恢复目标。
+
+\section{初始化与可比性}
+
+解析器优先读取 \texttt{<benchmark>.eplace-ip.pl}，否则回退到原始
+Bookshelf \texttt{.pl}。当前工作区只有 adaptec1 提供 ePlace-IP 文件，
+其余七组均从 supplied \texttt{.pl} 开始。因此本实验可以检查“当前仓库
+按默认方式能否跑通八组”，但不能把八组间的 HPWL 差异全部归因于 bundle
+本身。DREAMPlace Table II 还包含不同的初始化、平滑线长、Nesterov、
+legalization 与 detailed placement 流程，其 HPWL 只能作为量级参考。
+
+\section{结果}
+
+\begin{table}[H]
+\centering
+\small
+\caption{八数据集统一 3000 步结果。HPWL 与 overflow 为恢复后的全局布局状态。}
+\begin{tabular}{l l r r r r}
+\toprule
+数据集 & 初始化 & HPWL (M) & Overflow & 时间 (s) & 首次 $\leq10\%$ \\
+\midrule
+adaptec1 & ePlace-IP & 75.433 & 6.477\% & 160.12 & 1241 \\
+adaptec2 & supplied .pl & 115.883 & 6.486\% & 108.53 & 1372 \\
+adaptec3 & supplied .pl & 326.346 & 6.480\% & 181.48 & 1351 \\
+adaptec4 & supplied .pl & 317.243 & 6.520\% & 202.84 & 1300 \\
+bigblue1 & supplied .pl & 103.900 & 6.486\% & 96.41 & 1427 \\
+bigblue2 & supplied .pl & 213.835 & 6.410\% & 224.84 & 1312 \\
+bigblue3 & supplied .pl & 707.435 & 7.162\% & 481.70 & 2162 \\
+bigblue4 & supplied .pl & 1497.324 & 6.511\% & 1007.55 & 1485 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+八组均满足 10\% 参考门槛，平均 overflow 为 6.566\%。求解器时间合计
+2463.47 秒，完整批处理墙钟时间约 2506 秒。八组被恢复的最优可行检查点
+均为全局第 2596 步，它与每 5 步插入 bundle 切平面的节拍一致。GIF 的
+末帧是第 3000 步恢复前轨迹，而表中数值是随后恢复的第 2596 步状态，故
+动图标题中的末帧 HPWL 会略高于结果表。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.98\textwidth]{figures/fig_ispd2005_aggregate_convergence.pdf}
+\caption{八数据集归一化 HPWL 与 overflow 收敛轨迹。前 150 步为
+HPWL-only，阶段切换导致曲线出现不连续斜率。}
+\end{figure}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.92\textwidth]{figures/fig_ispd2005_result_summary.pdf}
+\caption{结果、overflow 与运行时间汇总。灰色 HPWL 为 DREAMPlace Table II
+的不同流程参考值，不能视为受控 baseline。}
+\end{figure}
+
+\section{主要观察}
+
+\subsection{密度可行性比 HPWL 更容易迁移}
+
+七组最终 overflow 聚集在 6.410\%--6.520\%，bigblue3 为 7.162\%。这说明
+静电密度梯度和 guarded lambda 能在 3000 步内覆盖八种规模，但 HPWL
+质量并未同步迁移。与 DREAMPlace Table II 的不同流程参考值相比，本轮
+HPWL 比值为 1.03--2.33，平均 1.63；该比值只用于提示量级，不能进行
+算法优劣归因。
+
+\subsection{bigblue3 暴露 lambda 尺度问题}
+
+bigblue3 直到第 2162 步才首次低于 10\%，显著晚于其他数据集的
+1241--1485 步。运行中 lambda control 长时间触及上限，表明 adaptec1 上
+调出的固定增益、上限与 25 步反馈节拍不具备实例规模不变性。bigblue4
+虽然规模更大，却在第 1485 步跨过 10\%，说明问题不只由节点数决定，还
+与初始分布、宏块空洞、可用面积和密度梯度归一化共同相关。
+
+\subsection{初始化是关键混杂因素}
+
+adaptec1 是唯一有 ePlace-IP 初值的数据集，也是唯一接近 DREAMPlace
+Table II HPWL 量级的数据集。其余七组从 supplied \texttt{.pl} 出发，
+不能据此断言 bundle 随规模失效。当前证据更准确地支持：在默认输入路径
+下，密度可行性可迁移，但 HPWL 质量与初值及尺度归一化强相关。
+
+\section{下一步建议}
+
+\begin{enumerate}
+  \item 为八组生成一致的初始化：统一使用中心小扰动、统一 QP/ePlace，或
+  至少进行两种初值的配对实验。
+  \item 将 7e7 的固定 HPWL baseline 改为每个实例 Phase-0 后的锁定 HPWL，
+  使 lambda 控制的线长压力无量纲化。
+  \item 在每个网格阶段测量 HPWL 次梯度与静电密度梯度 RMS，用
+  $\lambda_{\mathrm{eff}}\propto\|g_{\mathrm{HPWL}}\|/
+  \|g_{\mathrm{density}}\|$ 初始化或重标定。
+  \item 让 lambda horizon 根据首次可行趋势或设计规模调整，但保持控制
+  增益按单位迭代时间归一化，避免简单缩短 interval 导致过强反馈。
+  \item 在统一初值和归一化后，做 bundle/no-bundle 配对运行；当前只有
+  bundle 单组结果，不能量化 bundle 在七个新实例上的净收益。
+\end{enumerate}
+
+\appendix
+\section{逐数据集收敛曲线}
+
+\begin{figure}[H]\centering
+\begin{subfigure}{0.49\textwidth}\includegraphics[width=\linewidth]{figures/fig_adaptec1_convergence.pdf}\caption{adaptec1}\end{subfigure}
+\begin{subfigure}{0.49\textwidth}\includegraphics[width=\linewidth]{figures/fig_adaptec2_convergence.pdf}\caption{adaptec2}\end{subfigure}
+\begin{subfigure}{0.49\textwidth}\includegraphics[width=\linewidth]{figures/fig_adaptec3_convergence.pdf}\caption{adaptec3}\end{subfigure}
+\begin{subfigure}{0.49\textwidth}\includegraphics[width=\linewidth]{figures/fig_adaptec4_convergence.pdf}\caption{adaptec4}\end{subfigure}
+\caption{adaptec 系列收敛曲线。}
+\end{figure}
+
+\begin{figure}[H]\centering
+\begin{subfigure}{0.49\textwidth}\includegraphics[width=\linewidth]{figures/fig_bigblue1_convergence.pdf}\caption{bigblue1}\end{subfigure}
+\begin{subfigure}{0.49\textwidth}\includegraphics[width=\linewidth]{figures/fig_bigblue2_convergence.pdf}\caption{bigblue2}\end{subfigure}
+\begin{subfigure}{0.49\textwidth}\includegraphics[width=\linewidth]{figures/fig_bigblue3_convergence.pdf}\caption{bigblue3}\end{subfigure}
+\begin{subfigure}{0.49\textwidth}\includegraphics[width=\linewidth]{figures/fig_bigblue4_convergence.pdf}\caption{bigblue4}\end{subfigure}
+\caption{bigblue 系列收敛曲线。}
+\end{figure}
+
+\section{最终轨迹帧}
+
+下图展示第 3000 步恢复前轨迹。完整 GIF 每组 61 帧，分辨率
+1320$\times$840，位于实验目录的 \texttt{animations/} 下。
+
+\begin{figure}[H]\centering
+\includegraphics[width=0.95\textwidth]{animations/adaptec1_final.png}
+\caption{adaptec1 第 3000 步轨迹帧。}
+\end{figure}
+
+\begin{figure}[H]\centering
+\includegraphics[width=0.95\textwidth]{animations/bigblue3_final.png}
+\caption{bigblue3 第 3000 步轨迹帧。}
+\end{figure}
+
+\begin{figure}[H]\centering
+\includegraphics[width=0.95\textwidth]{animations/bigblue4_final.png}
+\caption{bigblue4 第 3000 步轨迹帧。}
+\end{figure}
+
+\section{复现材料}
+
+实验协议、逐步 CSV、lambda/bundle 日志、布局文件、快照、绘图脚本、
+PNG/PDF 曲线和 GIF 均位于
+\texttt{research/bundle\_hpwl/experiments/ispd2005\_eight\_benchmarks/}。
+汇总 CSV 位于
+\texttt{research/bundle\_hpwl/data/ispd2005\_bundle\_results.csv}。
+
+\end{document}

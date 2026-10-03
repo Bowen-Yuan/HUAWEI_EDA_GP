@@ -1,0 +1,571 @@
+\documentclass[UTF8,fontset=windows,a4paper,11pt]{ctexart}
+\usepackage[margin=2.25cm]{geometry}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{booktabs,longtable,tabularx,array}
+\usepackage{graphicx,float,caption}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{hyperref}
+
+\definecolor{accent}{HTML}{0072B2}
+\definecolor{warm}{HTML}{D55E00}
+\definecolor{soft}{HTML}{EEF4F7}
+\definecolor{dark}{HTML}{263238}
+\hypersetup{colorlinks=true,linkcolor=accent,urlcolor=accent,citecolor=accent}
+\graphicspath{{figures/}}
+\setlength{\parindent}{2em}
+\setlength{\parskip}{0.25em}
+\setlist{nosep,leftmargin=2em}
+\pagestyle{fancy}
+\setlength{\headheight}{14pt}
+\fancyhf{}
+\fancyhead[L]{非光滑 HPWL 与静电密度全局布局实验报告}
+\fancyhead[R]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\newcommand{\hpwl}{\operatorname{HPWL}}
+\newcommand{\overflow}{\operatorname{Overflow}}
+
+\title{\textbf{非光滑 HPWL 与静电密度模型的全局布局优化}\\
+\large 3000 步动态 $\lambda$、捆集方向与极值驱动实验报告}
+\author{alg-electronic 实验分支}
+\date{2026 年 7 月 31 日}
+
+\begin{document}
+\maketitle
+
+\begin{center}
+\colorbox{soft}{\parbox{0.92\textwidth}{
+\textbf{不可违反的建模约束：}本文及当前实现中的线长项始终是原始
+$\max-\min$ HPWL，并直接使用其次梯度。没有使用 LogSumExp、加权平均线长、
+gamma 退火或任何其他 HPWL 平滑。本文中的``平滑''只描述密度电荷沉积和静电势场，
+不描述线长项。}}
+\end{center}
+
+\begin{abstract}
+本文总结将 DREAMPlace/ePlace 风格静电密度能迁移到项目原有非光滑布局求解流程后的
+建模、优化和 3000 步调参结果。目标是在 adaptec1 上同时降低精确 HPWL，并把平均
+overflow 控制在 6\% 以内。原 heavy-ball 最好结果为 HPWL $7.9423\times 10^7$、
+overflow 5.9985\%。后续在完全不平滑 HPWL 的前提下加入小规模近端捆集：保存最近
+2--3 个精确 HPWL 切平面，用 Frank-Wolfe 求解切平面对偶并聚合次梯度。两个独立的
+两切面运行得到 76.120M 和 75.677M，最好 overflow 为 5.9982\%，相对原基线改善
+4.72\%。测量还发现相隔两步的 HPWL 次梯度平均余弦约为 $-0.45$，说明极值引脚切换
+形成显著方向翻转；小捆集能够消除这一对冲分量。报告同时记录失败的投影、重启、
+过大捆集和余弦控制实验，并解释为何目前仍未达到 70M/6\%。
+\end{abstract}
+
+\section{问题定义与评估口径}
+
+给定可移动单元位置 $\bm z=(x_1,y_1,\ldots,x_N,y_N)$，当前求解目标可写成
+\begin{equation}
+  \min_{\bm z\in\Omega}\quad W(\bm z)
+  \qquad \text{s.t.}\qquad O(\bm z)\leq 0.06,
+\end{equation}
+其中 $\Omega$ 是芯片边界，$W$ 是精确 HPWL，$O$ 是按 bin 超额面积统计的平均
+overflow。代码使用静电能 $U$ 作为可微的密度代理，通过动态权重求解
+\begin{equation}
+  F(\bm z;\lambda)=W(\bm z)+\lambda_{\rm eff}U(\bm z).
+\end{equation}
+
+需要强调，$U$ 与报告的 $O$ 并不是同一个函数：前者对整个密度场的低频与高频
+不均匀性积分，后者只累计超过目标容量的正部。因此，减小静电能通常会降低 overflow，
+但二者不具有严格的一一对应关系。这一差异是当前控制难点的重要来源。
+
+实验基准为 ISPD 2005 adaptec1。解析后包含 210,904 个可移动单元和 221,142 条网。
+目标基线为 HPWL 约 $7.0\times 10^7$、overflow 约 6\%。本文表格中的 HPWL 是
+全局布局阶段、合法化之前按单元中心计算的精确值；求解器最终恢复 fine-grid 阶段中
+满足 $O\leq 0.06$ 的最低 HPWL 状态。OpenMP 浮点归并顺序会造成约千分之几的重复运行
+差异，因此同时报告历史最好值和可视化独立重跑值。
+
+\section{精确非光滑 HPWL}
+
+对网 $e$，当前代码直接计算
+\begin{equation}
+ W_e(\bm z)=\max_{i\in e}x_i-\min_{i\in e}x_i+
+             \max_{i\in e}y_i-\min_{i\in e}y_i,
+ \qquad W=\sum_e W_e.
+\end{equation}
+若 $x_i$ 是唯一最大值，则 $\partial W_e/\partial x_i=+1$；若是唯一最小值，则为
+$-1$；否则为 0。多个引脚并列极值时，代码在并列引脚之间均分 $+1$ 或 $-1$，例如
+$n_{\max}$ 个最大值各取 $1/n_{\max}$。$y$ 方向完全相同。
+
+该次梯度是合法的，但在网的极值引脚发生切换时会不连续。它带来两个直接后果：
+一是大动量可能在极值切换后继续沿旧方向移动；二是基于二阶矩的 Adam 会把频繁的
+符号翻转解释为高方差，从而缩小某些关键坐标的有效步长。实验表明，保守 heavy-ball
+比当前 Adam 配置更适合这一问题。
+
+\section{静电密度模型}
+
+\subsection{电荷沉积}
+
+每个可移动单元被视为带正电的矩形，电荷量等于单元面积。为避免小单元相对于 bin
+过窄，宽高分别至少扩展到 $\sqrt{2}$ 个 bin；扩展矩形外再使用宽度为
+$\sqrt{2}$ 个 bin 的线性肩部核。二维权重由 $x/y$ 两个一维权重的乘积构成，并归一化
+以严格保持单元总面积。固定单元按其与 bin 的真实交叠面积沉积，并乘目标密度 0.8，
+等价于从可移动容量中扣除阻塞。
+
+设沉积后的面积密度为 $\rho(x,y)$。实现使用正交二维 DCT-II 将其变换到频域。
+直流分量 $(0,0)$ 被移除，相当于加入均匀中和背景电荷。对非零频率
+$(k_x,k_y)$，Poisson 方程
+\begin{equation}
+ -\nabla^2\phi=\rho-\bar\rho
+\end{equation}
+在频域中成为
+\begin{equation}
+ \widehat\phi(k_x,k_y)=
+ \frac{\widehat\rho(k_x,k_y)}{k_x^2+k_y^2}.
+\end{equation}
+电场为 $\bm E=-\nabla\phi$，静电能为
+\begin{equation}
+ U=\frac{1}{2}\int \rho\phi\,\mathrm dA
+   \approx \frac{A_{\rm bin}}{2}
+   \sum_{(u,v)\ne(0,0)}\widehat\rho_{uv}\widehat\phi_{uv}.
+\end{equation}
+
+\subsection{静电场如何把单元推开}
+
+拥挤区域沉积较高正电荷，Poisson 解在这些区域形成较高电势。电场从高势/高密度区
+指向较低密度区。对单元 $i$，代码按其面积核插值电场，得到电力
+\begin{equation}
+ \bm f_i=q_i\sum_b w_{ib}\bm E_b.
+\end{equation}
+静电能梯度是负电力 $\nabla_i U=-\bm f_i$，而梯度下降执行
+$\bm z_i\leftarrow\bm z_i-\eta\lambda_{\rm eff}\nabla_iU$，所以实际位移沿
+$+\bm f_i$，即从拥挤区流向空闲区。该过程不是逐对计算单元排斥力，而是先构造全局
+电荷图，再用一次 Poisson 解获得全局长程排斥场。
+
+\subsection{overflow 的报告方式}
+
+令 bin $b$ 的面积密度为 $\rho_b$，目标密度为 $\rho_t=0.8$，则
+\begin{equation}
+ O=\frac{\sum_b A_b[\rho_b-\rho_t]_+}{A_{\rm available}},
+ \qquad [a]_+=\max(a,0).
+\end{equation}
+注意这个正部操作只用于\textbf{评估与控制}。参与坐标求导的是上面的静电能，而不是
+原有硬 overflow 的不可导梯度。
+
+\section{权重标定与动态 \texorpdfstring{$\lambda$}{lambda}}
+
+\subsection{梯度范数标定}
+
+用户侧的 $\lambda$ 是无量纲控制量。每次切换 coarse/medium/fine 网格时，首先计算
+线长次梯度和密度梯度的 $L_1$ 范数比
+\begin{equation}
+ s=\frac{\sum_i(|g^W_{x,i}|+|g^W_{y,i}|)}
+         {\sum_i(|g^U_{x,i}|+|g^U_{y,i}|)+\epsilon},
+ \qquad \lambda_{\rm eff}=s\lambda.
+\end{equation}
+组合梯度为 $\bm g=\bm g^W+\lambda_{\rm eff}\bm g^U$。这一标定修复了早期版本中
+$\lambda$ 只改变日志数值、却不能可靠控制密度梯度量级的问题，并使不同 bin 尺度上的
+$\lambda$ 更可比较。
+
+\subsection{当前连续反馈控制器}
+
+fine 阶段每 25 个密度步更新一次 $\lambda$。令目标 $O^*=0.0598$，
+\begin{align}
+ e_t &= \frac{O_t-O^*}{0.06},\\
+ \bar e_t &=0.75\bar e_{t-1}+0.25e_t,\\
+ p_t &=\max\left(0,\frac{W_t}{7.0\times10^7}-1\right),\\
+ \Delta_t &=1.35e_t+0.35\bar e_t-
+  \mathbb I[O_t\leq0.06]\,0.12p_t.
+\end{align}
+然后把 $\Delta_t$ 截断到 $[\log 0.5,\log 1.15]$，并更新
+\begin{equation}
+ \lambda_{t+1}=\operatorname{clip}
+ \left(\lambda_t\exp(\Delta_t),\lambda_{\min},\lambda_{\max}\right).
+\end{equation}
+overflow 高时指数增加密度力；已经可行而 HPWL 偏高时温和减小密度力。若 overflow
+超过 6\% 的 1.05 倍且 $\lambda$ 太小，则从 0.1 的控制量下限重新激活铺开。
+coarse/medium 阶段仍使用每 50 步比较 HPWL 与 overflow 相对基线的早期控制器。
+
+该策略比简单``乘二/减半''稳定，因为误差越小，更新自然越小；同时又保留单步
+$[0.5,1.15]$ 的硬边界，避免指数反馈失控。把目标提高到 5.99\% 的实验没有改善
+HPWL，说明 5.98\% 的轻微安全余量有助于减少边界穿越。
+
+\section{3000 步优化流程}
+
+\begin{enumerate}
+  \item \textbf{Phase 0，150 步：}只优化精确 HPWL，$\lambda=0$。使用 ePlace/QP
+  初始位置，并在阶段末恢复该阶段最低 HPWL 状态。
+  \item \textbf{Coarse，100 步：}在 fine 网格的 $1/4$ 分辨率上引入静电密度，
+  初始控制 $\lambda=0.02$，允许单元暂时越出一个单元宽度的边界余量。
+  \item \textbf{Medium，150 步：}使用 $1/2$ 分辨率网格，重新计算梯度范数标定，
+  降低基础步长并继续自适应 $\lambda$。
+  \item \textbf{Fine，2600 步：}使用完整网格，heavy-ball 动量 0.70；最后一段把
+  学习率平滑降到常规值的 0.15。每次记录所有满足 overflow $\leq6\%$ 的状态，结束时
+  恢复其中 HPWL 最低者。
+\end{enumerate}
+
+heavy-ball 更新采用全局 RMS 归一化：
+\begin{align}
+ r_t&=\sqrt{\frac{1}{N}\sum_i\|\bm g_{t,i}\|_2^2+\epsilon},\\
+ \widetilde{\bm g}_{t,i}&=\operatorname{clip}(\bm g_{t,i}/r_t),\\
+ \bm m_t&=\beta\bm m_{t-1}+(1-\beta)\widetilde{\bm g}_t,\\
+ \bm z_{t+1}&=\Pi_{\Omega}(\bm z_t-\eta_t\bm m_t).
+\end{align}
+这种更新保留了非光滑次梯度本身，只对整体尺度和坐标步幅做数值控制。
+
+\section{尝试过的方法与结果}
+
+\begin{table}[H]
+\centering
+\caption{主要 3000 步消融。HPWL 单位为百万；均未平滑 HPWL。}
+\small
+\begin{tabularx}{\textwidth}{>{\raggedright\arraybackslash}Xrr>{\raggedright\arraybackslash}p{5.2cm}}
+\toprule
+方法 & HPWL & overflow & 结论 \\
+\midrule
+连续 $\lambda$ + heavy-ball（捆集前基线） & 79.423 & 5.9985\% & 恢复严格可行状态 \\
+连续 $\lambda$ 可视化独立重跑 & 79.648 & 5.9999\% & 121 帧，验证可复现趋势 \\
+窄带投影（$6\%\pm0.03\%$） & 79.484 & 5.9704\% & 非常接近，但未稳定超过基线 \\
+宽带投影（$6\%\pm0.20\%$） & 79.720 & 5.8010\% & 过度保守，浪费密度余量 \\
+$\lambda$ 目标改为 5.99\% & 79.897 & 5.9998\% & 边界振荡增加，未改善线长 \\
+轨迹 PI-D 控制器 V3 & 80.526 & 约 6.000\% & 比乘法网格智能，但轨迹偏差累积 \\
+单边投影（失败版本） & 84.329 & 2.6910\% & 深度可行后仍投影，无法回收 HPWL \\
+Adam（3000 步） & 87.351 & 5.9999\% & 二阶矩抑制关键非光滑坐标 \\
+局部动量冲突重启 & 91.105 & 5.9868\% & 重启过于频繁，破坏整体迁移 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.98\textwidth]{fig_exact_hpwl_ablation.pdf}
+  \caption{优化器和 $\lambda$ 策略消融。更低的 overflow 并不自动意味着更好的受约束解；
+  应优先比较满足 6\% 约束时的 HPWL。}
+\end{figure}
+
+\subsection{Adam、动量与阶段结构}
+
+800 步预算下，Adam 的最佳配置得到 HPWL 106.028M、overflow 5.9873\%；它能快速把
+overflow 拉到约束附近，但 HPWL 回收时间不足。3000 步下 Adam 仍为 87.351M，明显差于
+heavy-ball。fine 动量 0.60、0.70、0.80 中，0.70 最好；0.80 容易在 6\% 附近振荡，
+0.60 则回收线长较慢。去掉后期学习率冷却得到约 81.750M，直接跳过 coarse/medium
+阶段得到约 81.418M，说明多尺度铺开和后期冷却都有实际价值。
+
+\subsection{轨迹式智能 \texorpdfstring{$\lambda$}{lambda}}
+
+轨迹控制器为 overflow 设定从初始值到约 6\% 的 smoothstep 目标轨迹，并使用比例、
+积分和趋势误差共同更新 $\log\lambda$。三版结果由 80.878M 改善到 80.526M，但仍不及
+当前连续控制器。主要问题是静电能与报告 overflow 不完全一致：控制器可能对短期
+overflow 噪声和网格切换误差进行积分，在后期继续支付过时误差。
+
+\subsection{可行边界 HPWL 投影}
+
+本轮测试了约束优化式投影。若线长次梯度与密度梯度内积为负，沿 $-\bm g^W$ 会增加
+静电能，于是使用
+\begin{equation}
+ \bm g^W_{\perp}=\bm g^W-
+ \frac{\langle\bm g^W,\bm g^U\rangle}{\|\bm g^U\|_2^2}\bm g^U.
+\end{equation}
+投影后，HPWL 方向对静电能的一阶变化为零，再叠加较小密度修正。单边激活条件会在
+overflow 已降到 2.7\% 时仍阻止密度回升，是明显错误；改为只在 6\% 附近窄带激活后，
+结果达到 79.484M，但仍没有超过 79.423M。原因是这里投影的是静电能梯度，而真正
+约束是正部 overflow，两者的切空间并不相同。该功能因此保留为实验开关，不作为默认。
+
+\section{收敛与空间过程可视化}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.98\textwidth]{fig_exact_hpwl_convergence.pdf}
+  \caption{精确 HPWL、overflow 与有效密度权重的收敛历史。前 150 步 $\lambda=0$；
+  密度阶段 HPWL 上升是为解除初始严重重叠所支付的必要代价。}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.98\textwidth]{fig_exact_hpwl_animation_final.png}
+  \caption{动画末帧布局密度及同步收敛曲线。图中第 3000 步是轨迹末状态；求解器输出
+  另外恢复第 2575 个 fine 迭代的最佳严格可行状态，因此末帧 6.003\% 与最终报告
+  5.9999\% 略有差别。}
+\end{figure}
+
+完整动图位于
+\path{figures/exact_hpwl_electrostatic_convergence.gif}，由现有 visualize 模块每 25 步
+导出的 121 个单元位置快照生成。每帧左侧是 180$\times$180 单元中心密度直方图，右侧
+游标同步标记精确 HPWL、overflow 和有效 $\lambda$。可复现脚本为
+\path{figures/gen_exact_hpwl_animation.py}。
+
+\section{精确 HPWL 的近端捆集扩展}
+
+\subsection{为什么精确 HPWL 可以建立切平面}
+
+对一条网 $e$，精确线长
+\begin{equation}
+ W_e(\bm z)=\max_{i\in e}x_i-\min_{i\in e}x_i
+              +\max_{i\in e}y_i-\min_{i\in e}y_i
+\end{equation}
+是若干仿射函数的最大值之和，因而是凸、连续、分段线性的；全局 HPWL
+$W=\sum_e W_e$ 仍然凸。即使极值引脚并列、普通梯度不存在，从活动极值引脚分配得到的
+$\bm g_j\in\partial W(\bm z_j)$ 仍满足次梯度不等式
+\begin{equation}
+ \ell_j(\bm z)=W(\bm z_j)+\bm g_j^\mathsf{T}(\bm z-\bm z_j)
+ \leq W(\bm z),\qquad \forall\bm z.
+ \label{eq:bundle-cut}
+\end{equation}
+所以每次精确 $\max-\min$ 计算都能提供一个对所有位置全局有效的仿射下界（cut），不需要、
+也没有引入任何 HPWL 平滑。单一步次梯度只描述当前活动极值集合；捆集保存多个历史活动
+集合，让求解器在极值引脚切换时不必完全遗忘上一侧的局部几何。
+
+代码中一个 \texttt{HpwlBundleCut} 保存五类数据：\texttt{hpwl} 是 $W(\bm z_j)$；
+\texttt{x}、\texttt{y} 是该 cut 建立时全部可移动单元的坐标；\texttt{gx}、
+\texttt{gy} 是同一点精确 HPWL 的合法次梯度。固定单元不需要存储，因为它们不属于
+优化变量。保留历史坐标不是为了回退布局，而是为了在当前点重新计算式
+\eqref{eq:bundle-cut} 的截距。
+
+\subsection{近端切平面子问题及其对偶推导}
+
+令当前点为 $\bm z_c$，并把第 $j$ 个 cut 平移到当前点，定义
+\begin{equation}
+ \beta_j=W(\bm z_j)+\bm g_j^\mathsf{T}(\bm z_c-\bm z_j),
+ \qquad
+ \varepsilon_j=W(\bm z_c)-\beta_j\geq0.
+\end{equation}
+$\varepsilon_j$ 是线性化误差：新鲜且与当前活动区域一致的 cut 通常误差小，跨过多个
+折点的旧 cut 截距较低。切平面的局部模型为
+$m(\bm d)=\max_j\{\beta_j+\bm g_j^\mathsf{T}\bm d\}$。只最小化该分段线性模型可能给出
+任意大的步，因此加入近端二次项：
+\begin{equation}
+ \min_{\bm d,t}\quad t+\frac{1}{2\tau}\|\bm d\|_2^2,
+ \quad\text{s.t.}\quad
+ \beta_j+\bm g_j^\mathsf{T}\bm d\leq t,\quad j=1,\ldots,K.
+ \label{eq:bundle-primal}
+\end{equation}
+其中 $\tau>0$ 控制模型步的尺度；$\tau$ 越小，越强调留在近端中心附近。
+
+给每条约束引入乘子 $\alpha_j\geq0$，拉格朗日函数为
+\begin{equation}
+ L=t+\frac{1}{2\tau}\|\bm d\|_2^2+
+ \sum_j\alpha_j(\beta_j+\bm g_j^\mathsf{T}\bm d-t).
+\end{equation}
+对 $t$ 取下确界要求 $\sum_j\alpha_j=1$；对 $\bm d$ 求一阶最优条件得到
+$\bm d^*=-\tau\sum_j\alpha_j\bm g_j$。代回后得到仅有 $K$ 个变量的单纯形对偶：
+\begin{equation}
+ \max_{\bm\alpha\in\Delta}\quad
+ Q(\bm\alpha)=\bm\alpha^\mathsf{T}\bm\beta-
+ \frac{\tau}{2}\left\|\sum_j\alpha_j\bm g_j\right\|_2^2,
+ \qquad
+ \Delta=\{\bm\alpha\geq0,\ \bm1^\mathsf{T}\bm\alpha=1\}.
+ \label{eq:bundle-dual}
+\end{equation}
+第一项偏好在当前点仍然贴近真实函数的 cut；第二项偏好相互抵消后范数较小的聚合
+次梯度。因此陈旧 cut 不需要硬编码按年龄衰减：其较大的 $\varepsilon_j$ 已通过较低的
+$\beta_j$ 自动压低权重。同时，对方向相反但都贴近当前函数的两个 cut，二次项会主动
+保留二者以抵消折点两侧的振荡分量。
+
+实现没有形成 $N\times N$ 矩阵，只建立 $K\times K$ Gram 矩阵
+$G_{jk}=\bm g_j^\mathsf{T}\bm g_k$。实际近端尺度按
+\begin{equation}
+ \tau=\texttt{bundle\_prox\_scale}\cdot
+       \frac{\texttt{lr}}{\max(\texttt{hpwl\_rms},10^{-6})}
+\end{equation}
+计算，使对偶中的范数惩罚随当步学习率和 HPWL 次梯度尺度同步。这里 $\tau$ 只用于选择
+cut 权重；现有框架最终仍由统一的归一化、heavy-ball 和学习率执行坐标步。
+
+\subsection{Frank--Wolfe 如何求两切面对偶}
+
+对偶目标的梯度是 $\nabla Q=\bm\beta-\tau G\bm\alpha$。代码采用以下小规模
+Frank--Wolfe 过程，避免引入额外 QP 依赖：
+\begin{enumerate}
+  \item 新 cut 插入后令 $\bm\alpha=\bm e_K$，即初始时完全信任最新的精确次梯度。
+  \item 计算每个 cut 的对偶梯度
+  $q_j=\beta_j-\tau\sum_kG_{jk}\alpha_k$。
+  \item 选取 $p=\arg\max_j q_j$；这是在线性化对偶目标上最优的单纯形顶点。
+  \item 令 $\bm s=\bm e_p$、$\bm r=\bm s-\bm\alpha$。Frank--Wolfe gap
+  为 $h=\nabla Q^\mathsf{T}\bm r$；若 $h\leq10^{-7}$，当前权重已足够好并停止。
+  \item 沿线段做解析线搜索：若 $\bm r^\mathsf{T}G\bm r>0$，取
+  \begin{equation}
+    \gamma=\min\!\left(1,
+    \frac{\nabla Q^\mathsf{T}\bm r}
+         {\tau\bm r^\mathsf{T}G\bm r}\right),
+  \end{equation}
+  否则取 $\gamma=1$，再更新
+  $\bm\alpha\leftarrow\bm\alpha+\gamma\bm r$。
+  \item 最多重复 20 次。当前推荐 $K=2$，所以子问题远小于一次全局 HPWL 或电场计算。
+\end{enumerate}
+最终聚合次梯度为 $\bar{\bm g}=\sum_j\alpha_j\bm g_j$，而式
+\eqref{eq:bundle-primal} 对应的模型位移是 $-\tau\bar{\bm g}$。在两切面情形，算法本质上
+是在一条单纯形线段上寻找“截距足够高且范数足够小”的平衡点；这正好针对观测到的
+两步极值翻转。
+
+\subsection{如何接入现有优化循环}
+
+bundle 仅在 fine refinement 阶段启用，每 5 步把当前精确 HPWL 点和次梯度加入队列，
+超过 2 个 cut 时删除最旧者。为保留当前活动极值信息，不直接用 $\bar{\bm g}$ 覆盖当前
+方向，而采用
+\begin{equation}
+ \bm g_{\rm use}=\mu\bm g_{\rm current}+(1-\mu)\bar{\bm g},
+ \qquad \mu=0.50.
+ \label{eq:bundle-mix}
+\end{equation}
+一次 fine 迭代的严格顺序是
+\begin{center}
+\fbox{\parbox{0.92\textwidth}{
+精确 $\max-\min$ HPWL 与合法次梯度
+$\rightarrow$ cut 插入和对偶聚合
+$\rightarrow$ 式 \eqref{eq:bundle-mix} 混合
+$\rightarrow$ 静电密度梯度范数标定并相加
+$\rightarrow$ 全梯度 RMS 归一化与 heavy-ball
+$\rightarrow$ 坐标边界投影
+$\rightarrow$ overflow 测量和动态 $\lambda$ 反馈。}}
+\end{center}
+这一区分很重要：bundle 从不近似 HPWL 函数值，也不处理密度项；静电梯度是在 HPWL
+方向聚合完成后才加入。因此报告中的 HPWL、最优状态选择和 lambda 控制所看到的始终是
+原始精确线长与真实 overflow。
+
+当前实现应称为\textbf{轻量近端 bundle 方向}，而不是完整的经典近端 bundle 求解器。
+经典方法会比较模型预测下降与真实函数下降，用 serious step 移动近端中心，用 null step
+只收集新 cut；本实现每步仍由原 heavy-ball 流程接受坐标更新，bundle 只改善 HPWL
+方向。这样能保持原调用和密度控制框架，但没有经典 serious/null-step 的收敛保护。
+
+\subsection{内存、运行代价与诊断量}
+
+两个 cut 各存一份可移动单元的 $(x,y,g_x,g_y)$，空间复杂度为 $O(4KN_m)$；每 5 步
+才重建一次 $K\times K$ Gram 矩阵并运行至多 20 次二维对偶迭代。相对于每步遍历全部
+网和 FFT 风格静电场，$K=2$ 的对偶开销很小，主要附加成本是历史向量存储与点积。
+\texttt{bundle\_strategy.csv} 的字段含义如下：
+\begin{description}[style=nextline,leftmargin=2.6cm]
+  \item[\texttt{cuts}] 当前有效 cut 数量。
+  \item[\texttt{tau}] 当次对偶使用的近端尺度 $\tau$。
+  \item[\texttt{newest\_weight}] 最新 cut 的 $\alpha_K$；越接近 1 表示历史 cut 几乎未参与。
+  \item[\texttt{model\_error}] $W(\bm z_c)-\sum_j\alpha_j\beta_j$，即聚合切平面与当前精确 HPWL 的间隙。
+  \item[\texttt{norm\_ratio}] $\|\bar{\bm g}\|_2/\|\bm g_{\rm current}\|_2$，量化 bundle 消除了多少方向对冲。
+  \item[\texttt{entropy}] $-\sum_j\alpha_j\log\alpha_j$，衡量权重是集中还是由多 cut 共同承担。
+  \item[\texttt{current\_mix}] 式 \eqref{eq:bundle-mix} 中实际使用的 $\mu$。
+  \item[\texttt{trigger\_cosine}] 当前次梯度与最新历史次梯度的余弦，用于诊断极值切换。
+  \item[\texttt{cut\_age}] 最新 cut 距当前 fine 迭代的步数；固定间隔配置下插入时通常为 5。
+\end{description}
+
+\subsection{极值切换的实测证据}
+
+为检验收益是否确实来自非光滑极值特性，实验计算当前 HPWL 次梯度与最新 cut 的全局
+余弦。相隔 2 步时平均余弦约为 $-0.45$，最小约 $-0.90$；固定 5 步插 cut 前，后期
+余弦常达到 $-0.8$ 左右。这说明大量网的最大/最小引脚在更新后发生反向切换，单一
+heavy-ball 只能在最终组合梯度上被动滤波，而捆集能利用函数值与线性化误差，在多个
+合法切平面之间主动选择低范数方向。
+
+持续使用余弦直接降低 current mix 并没有更好：它在后期仍把 $\mu$ 压到约 0.25，
+导致 HPWL 回收不足。将余弦增益逐渐衰减到零可恢复到固定 mix 的水平，但仍未超过
+固定两切面最好值。因此余弦适合作为诊断信号，而不适合作为长期控制器。
+
+\begin{table}[H]
+\centering
+\caption{捆集结构与极值驱动消融。HPWL 单位为百万。}
+\small
+\begin{tabular}{lrrl}
+\toprule
+配置 & HPWL & overflow & 结论 \\
+\midrule
+无捆集 heavy-ball & 79.423 & 5.9985\% & 原基线 \\
+4 cut，interval 5 & 76.522 & 5.9999\% & 首个确认性改进 \\
+3 cut，interval 5 & 76.164 & 5.9999\% & 小捆集更好 \\
+2 cut，运行 1 & 76.120 & 5.9968\% & 与 3 cut 接近 \\
+2 cut，运行 2 & \textbf{75.677} & \textbf{5.9982\%} & 当前最好 \\
+全程余弦自适应 mix & 76.920 & 5.9998\% & 后期过度依赖历史 \\
+衰减余弦 mix & 76.146 & 5.9996\% & 恢复固定 mix 水平 \\
+6 cut（1800 步） & 83.318 & 6.1460\% & 过度正则且尚不可行 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.98\textwidth]{fig_bundle_hpwl_results.pdf}
+  \caption{两切面近端捆集的收敛、内部权重与结构消融。bundle 在相同 overflow 边界上
+  持续回收出更低的精确 HPWL。}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.98\textwidth]{fig_bundle_hpwl_animation_final.png}
+  \caption{bundle 可视化运行的最后一帧。左侧密度图直接读取现有 visualize 模块导出的
+  单元坐标快照；右侧四组曲线分别显示精确 HPWL、overflow、有效 $\lambda$，以及最新
+  cut 权重和聚合/当前梯度范数比。竖直游标与当前快照的全局迭代号严格同步。}
+  \label{fig:bundle-animation}
+\end{figure}
+
+完整 GIF 每 25 个全局迭代取一帧，覆盖初始状态、150 步 HPWL-only 阶段、粗/中密度
+扩散和 fine bundle refinement。bundle 日志只从 fine 阶段开始，因而图
+\ref{fig:bundle-animation} 的第四面板在此之前自然为空；进入 fine 阶段后，每个点对应
+一次新 cut 和对偶更新。生成脚本为 \path{figures/gen_exact_hpwl_animation.py}，同一脚本
+在没有 \texttt{bundle\_strategy.csv} 时仍生成原来的三面板非 bundle 动图。
+本次可视化独立重跑的第 3000 步快照为 HPWL 75.893M、overflow 5.9997\%；随后求解器
+按既有逻辑恢复第 2596 个 fine 迭代的最佳可行状态，最终写出 HPWL 75.780M、overflow
+5.9997\%，运行时间 147.25 秒。因此 GIF 展示真实前向轨迹，最终布局文件则对应恢复后的
+最佳可行解，两种口径没有混用。
+
+该方法通过 \texttt{--bundle-hpwl} 显式启用；当前没有改变默认调用行为。推荐复现实验命令为
+\begin{center}
+\small\ttfamily
+nsp\_placer.exe ispd2005/adaptec1/adaptec1 --bundle-hpwl --bundle-size 2
+--bundle-interval 5 --bundle-prox 2.0 --bundle-current-mix 0.50
+\end{center}
+
+\section{为什么尚未达到 70M/6\%}
+
+当前最好 HPWL 75.677M 相对 70M 目标仍高约 8.1\%。从曲线和消融可以排除``只要把
+$\lambda$ 再调大或再调小''这种单一解释，主要瓶颈可能是：
+
+\begin{enumerate}
+  \item \textbf{代理目标与约束不一致。}静电能惩罚所有空间不均匀，而 overflow 只关心
+  超容量正部。一个标量 $\lambda$ 可能为了降低无关的低频不均匀而牺牲 HPWL。
+  \item \textbf{全局权重无法解决局部冲突。}某些拥挤 bin 需要更强排斥，已经稀疏的区域
+  则应允许线长回收。单一 $\lambda$ 对所有单元施加相同相对权重，容易同时过约束和欠约束。
+  \item \textbf{精确 HPWL 次梯度信息稀疏且跳变。}每条网只有极值引脚获得非零梯度，
+  极值切换又造成方向突变。简单 heavy-ball 能缓和噪声，但不能构造稳定的局部模型。
+  \item \textbf{多尺度密度仍较粗。}全局电场擅长消除大尺度拥挤，却可能在 fine 阶段保留
+  局部热点。最终平均 overflow 接近 6\%，但可视化重跑最大单 bin overflow 仍约 0.875，
+  说明平均指标掩盖了局部密度峰值。
+  \item \textbf{初始化到可行域距离很远。}ePlace/QP 初始 HPWL 约 42M，但 overflow 可达
+  40\%--50\%。把 21 万单元从中心拥挤状态推到全芯片范围必然显著增加线长，后续 2600
+  步主要在受约束边界缓慢回收。
+  \item \textbf{度量与数据模型可能尚不完整。}当前网长按单元中心计算；若原数据包含精确
+  pin offset、宏单元特殊约束或合法化后评价口径，70M 基线与本实现可能并非完全同口径。
+\end{enumerate}
+
+\section{后续建议}
+
+\begin{enumerate}
+  \item \textbf{优先实现逐 bin 或分区乘子。}把标量 $\lambda$ 替换为
+  $\lambda_b\geq0$，按每个 bin 的容量违反更新，并保留一个全局正则项。这比继续扫描
+  $1.10/1.15/1.20$ 更可能解决局部冲突。
+  \item \textbf{让约束梯度与评估指标一致。}构造平滑的正部容量违反代理
+  $\sum_b\psi(\rho_b-\rho_t)$ 仅用于密度约束，或直接估计 overflow 对坐标的广义梯度；
+  HPWL 仍保持精确非光滑。这样可行边界投影才有正确法向量。
+  \item \textbf{把轻量捆集扩展为 serious/null-step 方法。}当前实现每步都接受坐标更新，
+  捆集只负责方向聚合。后续可用实际下降量与切平面预测量之比决定 serious step，
+  null step 只更新模型不移动近端中心，从而更严格地控制极值切换。
+  \item \textbf{采用可行性滤波器。}分别维护``最佳 HPWL''和``最佳 overflow''档案，接受
+  能改善任一指标且不显著破坏另一指标的步；在接近 6\% 时用小规模回溯搜索选择步长，
+  而不是只依赖固定冷却曲线。
+  \item \textbf{提高实验严谨性。}对候选配置至少重复 3 次，固定 OpenMP 线程数，并报告
+  中位数与范围。两次两切面结果 75.677M 与 76.120M 的差异说明单次运行不足以区分
+  0.6\% 以内的改进。
+  \item \textbf{加入合法化反馈。}当前最佳状态按全局布局 overflow 选择。后续可周期性调用
+  轻量行投影或估计合法化位移，把可合法化性和最终线长更早纳入优化。
+\end{enumerate}
+
+\section{结论}
+
+在绝不平滑 HPWL 的前提下，静电密度模型可以稳定接入原 alg 求解流程，并通过梯度
+范数标定使 $\lambda$ 真正控制密度梯度。在原 heavy-ball/连续 $\lambda$ 基线上加入
+2--3 个精确 HPWL cut 的近端聚合后，两次两切面运行达到 76.120M 和
+75.677M，overflow 均严格低于 6\%，最好相对原 79.423M 改善 4.72\%。负余弦测量
+直接证实极值引脚切换会造成强方向翻转，小捆集能够消除其中的对冲分量；过多 cut、
+过短或过长间隔、全程余弦 mix 和降低 $\lambda$ 增长上限都没有更好。当前方法仍为
+opt-in，下一阶段应在更多 benchmark 上重复验证，并把方向聚合扩展为带 serious/null
+step 的完整近端捆集，同时探索逐 bin 密度乘子。
+
+\begin{thebibliography}{9}
+\bibitem{dreamplace}
+Y. Lin, S. Dhar, W. Li, H. Ren, B. Khailany, and D. Z. Pan,
+``DREAMPlace: Deep Learning Toolkit-Enabled GPU Acceleration for Modern VLSI Placement,''
+\textit{Design Automation Conference}, 2019.
+\bibitem{eplace}
+J. Lu, P. Chen, C.-C. Chang, L. Sha, D. J.-H. Huang, C.-C. Teng, and C.-K. Cheng,
+``ePlace: Electrostatics-Based Placement Using Fast Fourier Transform and Nesterov's Method,''
+\textit{ACM Transactions on Design Automation of Electronic Systems}, 2015.
+\end{thebibliography}
+
+\end{document}

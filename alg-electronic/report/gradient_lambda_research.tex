@@ -1,0 +1,414 @@
+\documentclass[UTF8,fontset=windows,a4paper,11pt]{ctexart}
+\usepackage[margin=2.05cm]{geometry}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{booktabs,tabularx,array,longtable}
+\usepackage{graphicx,float,caption}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage[hidelinks]{hyperref}
+
+\definecolor{accent}{HTML}{0072B2}
+\definecolor{green}{HTML}{009E73}
+\definecolor{warm}{HTML}{D55E00}
+\definecolor{soft}{HTML}{EEF4F7}
+\definecolor{dark}{HTML}{263238}
+
+\setlength{\parindent}{2em}
+\setlength{\parskip}{0.28em}
+\setlength{\emergencystretch}{2em}
+\setlist{nosep,leftmargin=2em}
+\captionsetup{font=small,labelfont=bf}
+\graphicspath{{../research/bundle_hpwl/experiments/gradient_lambda_optimization/figures/}}
+
+\pagestyle{fancy}
+\setlength{\headheight}{14pt}
+\fancyhf{}
+\fancyhead[L]{精确非光滑 HPWL 的梯度法与动态 $\lambda$ 研究}
+\fancyhead[R]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\newcommand{\hpwl}{\operatorname{HPWL}}
+\newcommand{\overflow}{\operatorname{Overflow}}
+\newcommand{\rms}{\operatorname{RMS}}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\title{\textbf{精确非光滑 HPWL 下的一般梯度法与动态 $\lambda$ 研究}\\
+\large 无 Bundle 的 Adam、Heavy-ball 与投影对偶控制在 adaptec2--4 上的 3000 步实验}
+\author{HUAWEI\_EDA / alg-electronic 研究报告}
+\date{2026 年 8 月 4 日}
+
+\begin{document}
+\maketitle
+
+\begin{center}
+\colorbox{soft}{\parbox{0.93\textwidth}{
+\textbf{硬约束：}本报告所有线长值和线长方向均来自逐网
+$\max x-\min x+\max y-\min y$。没有使用 LogSumExp、weighted-average、
+softmax 极值、gamma 退火或任何其他 HPWL 平滑。平滑只存在于静电密度代理项中；
+Adam 的矩估计发生在精确次梯度计算之后，不改变目标函数定义。
+}}
+\end{center}
+
+\begin{abstract}
+上一轮两切面 bundle 在 adaptec2、adaptec3、adaptec4 上分别得到
+88.367M、241.559M、203.894M 的精确 HPWL。本研究关闭 bundle，在相同的
+DREAMPlace 风格中心初始化、150 步 HPWL-only 阶段、10\% overflow 可行阈值和
+3000 总步预算下，比较 normalized subgradient、heavy-ball、adaptive restart、
+Adam，以及 guarded、trajectory PI-D 和投影对偶三类动态 $\lambda$ 控制器。
+受控 adaptec2 实验表明，使用相同 trajectory 控制器时，heavy-ball 得到
+93.075M，而经调节的 Adam 得到 87.162M，改善 6.35\%。最佳 Adam 使用
+$\beta_1=0.90$、$\beta_2=0.99$，并把原先过小的步长倍率从 0.70 提高到 3--5。
+最终 adaptec2/3/4 分别达到
+\textbf{87.162M/9.9536\%、230.189M/9.9492\%、201.272M/9.9143\%}，
+相对 bundle 再改善 1.36\%、4.71\%、1.29\%。trajectory PI-D 在 1200 步筛选中
+得到 89.984M，优于 guarded 的 92.860M 和最佳可行投影对偶的 93.173M。
+不过，本方法仍高于 DREAMPlace Table II 参考 6.01\%、18.83\%、15.62\%；
+三个最佳点也都出现在最后一个 fine step，说明预算结束时尚未收敛。
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{研究问题与评价边界}
+
+设所有可移动单元中心坐标组成 $\bm z\in\Omega$，本项目求解
+\begin{equation}
+ \min_{\bm z\in\Omega} W(\bm z)
+ \qquad \text{s.t.}\qquad O(\bm z)\leq 0.10,
+ \label{eq:problem}
+\end{equation}
+其中 $W$ 是精确 HPWL，$O$ 是本项目按可用面积归一化的 bin excess area。
+主指标锁定为 3000 总步内、fine-grid overflow 不超过 10\% 的最低精确 HPWL。
+
+所有晋级实验使用固定协议：DREAMPlace 风格中心高斯微扰，随机种子 1000；
+前 150 步只下降精确 HPWL，$\lambda=0$；取消 coarse 和 medium 阶段，把剩余
+2850 步全部用于 fine-grid 静电密度优化；关闭 bundle；最佳状态必须来自满足
+式\eqref{eq:problem}的实际迭代点。DREAMPlace Table II 数字只作量级参考，
+因为其初始化细节、overflow 算子、平滑线长/Nesterov 流程、legalization 和
+detailed placement 均与本项目不同\cite{dreamplace}。
+
+\section{精确非光滑 HPWL}
+
+对网 $e$，线长严格定义为
+\begin{equation}
+ W_e(\bm z)=\max_{i\in e}x_i-\min_{i\in e}x_i+
+             \max_{i\in e}y_i-\min_{i\in e}y_i,
+ \qquad W=\sum_e W_e.
+ \label{eq:hpwl}
+\end{equation}
+唯一最大引脚在相应坐标上获得 $+1$，唯一最小引脚获得 $-1$，其他引脚为 0；
+并列极值时在并列引脚之间均分符号权重。这是合法次梯度，但极值引脚变化会使方向
+突然翻转。此前测得相隔两步的全局 HPWL 次梯度余弦均值约为 $-0.45$，因此
+方向冲突是持续的 active-set 现象，不是偶发数值错误。
+
+本轮的关键区别是：不再用 bundle 聚合或削弱当前方向，而是保留当前精确次梯度，
+仅在优化器内部对其历史尺度进行预条件。由此可直接检验 bundle 的收益究竟来自
+必要的非光滑建模，还是来自对过小/失配步长的间接补偿。
+
+\section{静电密度项与梯度尺度}
+
+每个可移动单元作为面积电荷，经连续核沉积到二维 bin 网格得到 $\rho$。
+去除直流分量后求解
+\begin{equation}
+ -\nabla^2\phi=\rho-\bar\rho,
+ \qquad \bm E=-\nabla\phi,
+ \qquad U(\bm z)=\frac12\int\rho\phi\,\mathrm dA.
+ \label{eq:electric}
+\end{equation}
+单元从高电势、高密度区域沿电场方向移向低密度区域。优化方向为
+\begin{equation}
+ \bm g=\bm g_W+\lambda_{\mathrm{eff}}\bm g_U,
+ \qquad \lambda_{\mathrm{eff}}=\lambda_c s,
+ \qquad s=\frac{\|\bm g_W\|_1}{\|\bm g_U\|_1+\varepsilon}.
+ \label{eq:combined}
+\end{equation}
+每个网格阶段第一次密度计算时确定 $s$，使控制器维护的无量纲 $\lambda_c$ 真正控制
+密度梯度。随后再用可移动坐标上的全局 RMS 归一化 $\bm g$。因此，本轮 Adam
+调参的对象不是原始物理梯度，而是已经做过全局尺度归一化的组合方向。
+
+\section{比较的一般梯度方法}
+
+\subsection{Normalized subgradient 与 Heavy-ball}
+
+普通方法以
+\begin{equation}
+ \widetilde{\bm g}_k=\operatorname{clip}
+ \left(\frac{\bm g_k}{\rms(\bm g_k)}\right)
+\end{equation}
+作为方向。零动量方法直接取 $\bm z_{k+1}=\bm z_k-\alpha_k\widetilde{\bm g}_k$。
+Heavy-ball 使用
+\begin{equation}
+ \bm m_k=\beta\bm m_{k-1}+(1-\beta)\widetilde{\bm g}_k,
+ \qquad \bm z_{k+1}=\bm z_k-\alpha_k\bm m_k.
+ \label{eq:hb}
+\end{equation}
+它以一个全局时间滤波器抑制极值翻转，但不能按坐标区分持续大梯度与偶发符号变化。
+
+adaptive restart 在局部满足
+$\bm m_{k-1}^{\mathsf T}\widetilde{\bm g}_k<0$ 时清空动量。该判据在光滑优化中
+可用于检测过冲，但对式\eqref{eq:hpwl}过于激进，因为负点积恰好是正常的极值切换。
+
+\subsection{Adam 预条件}
+
+Adam 对每个坐标维护
+\begin{align}
+ \bm m_k&=\beta_1\bm m_{k-1}+(1-\beta_1)\widetilde{\bm g}_k,\\
+ \bm v_k&=\beta_2\bm v_{k-1}+(1-\beta_2)
+              \widetilde{\bm g}_k^{\odot2},\\
+ \bm z_{k+1}&=\bm z_k-alpha_k c\,
+ \frac{\widehat{\bm m}_k}{\sqrt{\widehat{\bm v}_k}+\epsilon},
+ \label{eq:adam}
+\end{align}
+其中帽号表示偏差修正，$c$ 是本轮暴露的 Adam 步长倍率。式\eqref{eq:adam}
+只重标度已经计算出的精确 HPWL 次梯度，不使用平滑极值，也不修改式\eqref{eq:hpwl}。
+
+旧代码固定 $\beta_1=0.80$、$\beta_2=0.99$、$c=0.70$。本轮新增可选参数
+\code{--adam-beta1}、\code{--adam-beta2}、\code{--adam-epsilon}、
+\code{--adam-step-scale} 和 \code{--adam-max-step}，默认值完全保持旧行为。
+
+\section{动态 \texorpdfstring{$\lambda$}{lambda} 控制器}
+
+\subsection{Guarded proportional}
+
+guarded 控制器根据当前 overflow 误差及其指数滑动平均，在对数域连续调整
+$\lambda_c$；当已经可行时，额外 HPWL 压力会降低密度权重。它比早期直接乘 2/除 2
+稳定，但同一比例增益同时负责初始扩散和后期边界调节，容易在高步长 Adam 下过度扩散。
+
+\subsection{Trajectory PI-D}
+
+trajectory 控制器从初始 overflow $O_0$ 向目标 $O_\star$ 生成 smoothstep 轨迹
+\begin{align}
+ p_k&=\min(1,k/H),\qquad q_k=p_k^2(3-2p_k),\\
+ O_k^{\mathrm{des}}&=O_\star+(O_0-O_\star)(1-q_k).
+ \label{eq:trajectory}
+\end{align}
+控制器使用位置误差、下降趋势误差和早期积分误差，在对数域更新 $\lambda_c$；轨迹结束后
+清空积分欠账，转为边界调节。本轮保持 $H=600$、$O_\star=0.0995$。
+
+\subsection{投影对偶上升}
+
+为提供更标准、更易解释的比较，本轮新增
+\begin{equation}
+ \lambda_{k+1}=\Pi_{[\lambda_{\min},\lambda_{\max}]}
+ \left(\lambda_k+\eta(O_k-O_\star)\right).
+ \label{eq:dual}
+\end{equation}
+该控制器不使用 HPWL baseline，不做倍数跳变，只有对偶步长 $\eta$。新增
+\code{--dual-lambda} 和 \code{--dual-lambda-rate} 均为 opt-in，旧调用方式不变。
+
+\section{实验协议与晋级规则}
+
+协议在新代码和新运行之前写入研究目录。宽筛选在 adaptec2 上运行 1200 总步，保持
+150 步 Phase-0 和 1050 步 fine-grid；它只用于淘汰明显不稳定方法。由于短预算的
+cooldown 从 fine step 250 开始，而 3000 步运行从 fine step 1800 才开始，短预算
+排序必须由完整运行确认。所有正结果和负结果均归档 stdout、收敛 CSV、lambda CSV、
+梯度诊断、命令行、placement 和运行元数据。
+
+\begin{verbatim}
+nsp_placer.exe adaptecX --max-iters 3000 --init dreamplace
+  --p0-iters 150 --p1-iters 0 --p2-iters 0
+  --adam --adam-beta1 0.90 --adam-step-scale S
+  --trajectory-lambda --lambda-horizon 600
+  --trajectory-target 0.0995 --overflow-baseline 0.10
+  --overflow-limit 0.10 --fine-cooldown-floor 0.25
+  --gradient-diagnostics
+\end{verbatim}
+adaptec2/3 使用 $S=5$，adaptec4 使用 $S=3$。
+
+\section{优化器筛选结果}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.96\textwidth]{fig_optimizer_screen.pdf}
+\caption{相同初始化、trajectory $\lambda$ 和 1200 总步下的一般梯度法比较。
+横轴越小越好；所有柱均满足本项目 overflow $\leq10\%$。}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\caption{adaptec2 优化器筛选。HPWL 单位为 million。}
+\begin{tabular}{lrrl}
+\toprule
+方法 & HPWL & Overflow & 机制判断\\
+\midrule
+零动量 normalized subgradient & 113.464 & 9.997\% & 极值翻转未滤波\\
+Heavy-ball 0.70 & 110.892 & 9.995\% & 时间滤波有效\\
+Heavy-ball 0.85 & 112.197 & 9.553\% & 历史过强且过度扩散\\
+Heavy-ball 0.70 + restart & 146.263 & 9.894\% & 正常翻转被误判为失败\\
+Adam 原参数 & 108.547 & 9.997\% & 坐标预条件有效\\
+Adam $\beta_1=0.90,c=3$ & \textbf{89.984} & 9.893\% & 最佳筛选\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+提高 $\beta_1$ 从 0.80 到 0.90 只改善约 0.4M，$\beta_1=0.95$ 则回退到
+111.206M。主要收益来自把 $c$ 从 0.70 提高到 3 左右，说明旧 Adam 在全局 RMS
+归一化后步长过小。adaptive restart 的 146.263M 是最强负结果：极值切换不能被
+简单等同于 momentum 失效。
+
+\section{Lambda 策略结果}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.94\textwidth]{fig_lambda_screen.pdf}
+\caption{固定 tuned Adam 后的 $\lambda$ 控制器比较。虚线右侧为不可行区域；
+Dual 1 的低 HPWL 不能作为合格结果。}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\caption{1200 步 $\lambda$ 控制器筛选。首次可行步只计 fine-grid。}
+\begin{tabular}{lrrrl}
+\toprule
+控制器 & HPWL & Overflow & 首次可行步 & 结论\\
+\midrule
+Trajectory, $H=600$ & \textbf{89.984} & 9.89\% & 555 & 最佳轨迹\\
+Guarded proportional & 92.860 & 9.36\% & 865 & 过度扩散\\
+Dual $\eta=1$ & 87.702 & 12.81\% & -- & 不可行\\
+Dual $\eta=3$ & 93.829 & 10.00\% & 605 & 建立密度力较慢\\
+Dual $\eta=5$ & 93.173 & 10.00\% & 179 & 最佳可行 dual\\
+Dual $\eta=8$ & 93.496 & 10.00\% & 106 & 增益过大开始回退\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Dual 5 比 trajectory 更早 376 个 fine step 进入可行区，却最终高 3.19M。
+因此，进入可行区的速度不是充分指标；关键是扩散期间形成的 HPWL-density 轨迹以及
+边界附近的下降效率。单一 $\eta$ 无法同时处理初始大违反和后期微小误差。
+将 trajectory horizon 改为 500/700 均回退；目标从 9.95\% 改为 9.98\%
+只改变约 0.019M，不构成显著收益。
+
+\section{3000 步完整结果}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig_final_comparison.pdf}
+\caption{旧 no-bundle、bundle、tuned Adam 与 DREAMPlace Table II 量级参考。
+DREAMPlace 数字来自不同端到端流程，不是受控同口径 baseline。}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\caption{三数据集最佳结果。HPWL 单位为 million。}
+\begin{tabular}{lrrrrrr}
+\toprule
+数据集 & 旧 no-bundle & Bundle & Adam & Overflow & 对 Bundle 改善 & 论文差距\\
+\midrule
+adaptec2 & 92.213 & 88.367 & \textbf{87.162} & 9.9536\% & 1.36\% & 6.01\%\\
+adaptec3 & 258.924 & 241.559 & \textbf{230.189} & 9.9492\% & 4.71\% & 18.83\%\\
+adaptec4 & 223.772 & 203.894 & \textbf{201.272} & 9.9143\% & 1.29\% & 15.62\%\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+最严格的优化器因果比较位于 adaptec2：相同中心初始化、相同 150/0/0 阶段预算、
+相同 trajectory 控制器和相同 3000 步下，Heavy-ball 0.70 为 93.075M，
+Adam 为 87.162M，改善 6.35\%。这排除了旧 no-bundle 结果中阶段和控制器差异。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig_full_convergence.pdf}
+\caption{三数据集 fine-grid 收敛。橙色为 tuned Adam，灰色为上一轮 bundle，
+蓝色虚线为 Adam overflow，黑色点线为 10\% 可行边界。}
+\end{figure}
+
+Adam 在三个数据集上均保留当前 active-set 方向并取得更陡的后期下降。
+adaptec3 的收益最大，说明 bundle 聚合在该实例上可能过度抵消有效方向；adaptec4
+的 scale 5 为 201.984M，而 scale 3 为 201.272M，表明统一步长仍不具备完整
+跨实例尺度不变性。
+
+\section{步长消融与稳定性}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.94\textwidth]{fig_adam_scale.pdf}
+\caption{adaptec2 的完整 3000 步 Adam 步长消融。大部分收益发生在 scale 2 到 3；
+提高 late cooldown floor 反而退化。}
+\end{figure}
+
+adaptec2 的 scale 2/3/4/5 分别为
+88.775M/87.304M/87.241M/87.162M，3--5 已形成浅平台。scale 5 重复运行得到
+87.227M，与首次相差 0.065M，因此相对 bundle 的改善稳定，但 3、4、5 之间的
+小差异不应解释为精确超参数最优。把 cooldown floor 从 0.25 提高到 0.40 使结果
+回退到 88.233M；更大的后期步长放大非光滑边界抖动，而没有提高净下降。
+
+\section{梯度诊断与未收敛问题}
+
+\begin{table}[H]
+\centering
+\caption{最佳 Adam 运行的后期诊断。下降量统计最后 400 个 fine step。}
+\begin{tabular}{lrrrr}
+\toprule
+数据集 & 首次可行步 & 最佳步 & 后 400 步 HPWL 下降 & 密度力/HPWL 力\\
+\midrule
+adaptec2 & 556 & 2849 & 2.36M & 0.052\\
+adaptec3 & 537 & 2849 & 6.82M & 0.045\\
+adaptec4 & 556 & 2849 & 4.50M & 0.029\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+三个最佳点均为最后一个 fine step，而不是中途 checkpoint。与此同时，后期密度力
+只占 HPWL 力的 2.9--5.2\%。因此剩余差距不能简单归因于 $\lambda$ 太大；主要问题是
+3000 步截断、精确极值切换下的可接受步长，以及沿可行流形的下降效率。继续无条件
+减小 $\lambda$ 会越过 10\% 边界，继续提高 cooldown floor 已被消融实验否定。
+
+\section{代码修改、兼容性与验证}
+
+本轮新增功能全部为 opt-in：
+\begin{itemize}
+ \item 可调 Adam 的 $\beta_1$、$\beta_2$、$\epsilon$、步长倍率和坐标步上限；
+ \item \code{--dual-lambda} 与 \code{--dual-lambda-rate} 投影对偶控制；
+ \item 独立的 dual controller 单元测试；
+ \item 隔离运行脚本、结果汇总脚本和五组可复现矢量图。
+\end{itemize}
+不带新参数的旧命令保持原有行为；\code{--adam} 仍使用旧默认
+$\beta_1=0.80,\beta_2=0.99,c=0.70$。本轮验证包括：
+\begin{itemize}
+ \item \code{mingw32-make -j4}；
+ \item \code{mingw32-make test-electric}；
+ \item \code{mingw32-make test-lambda}；
+ \item \code{mingw32-make test-trajectory}；
+ \item \code{mingw32-make test-dual-lambda}；
+ \item 晋级运行均完整记录 3000 总步，无 NaN/Inf；
+ \item 对 \code{src/hpwl.cpp} 去除注释后扫描禁用操作，确认没有 HPWL 平滑。
+\end{itemize}
+
+\section{限制与下一步}
+
+\begin{enumerate}
+ \item \textbf{仍未达到 DREAMPlace。}差距为 6.01\%、18.83\%、15.62\%，且比较
+  不是端到端同口径复现，不能把全部差距归因于优化器。
+ \item \textbf{步长仍与实例相关。}a2/a3 偏好 scale 5，a4 偏好 scale 3。
+  下一步应使用梯度/步长 trust ratio 或按预条件后步长 RMS 自动归一，而非手工选 3/5。
+ \item \textbf{需要可行性线搜索。}候选步应同时评估真实 overflow 和精确 HPWL，
+  在 $O\leq10\%$ 邻域选择最大可接受下降，而不是只依赖固定 cooldown。
+ \item \textbf{投影对偶需要双时间尺度。}初始扩散可使用较大对偶增益，进入边界后降低
+  增益或加入增广项；单一 $\eta$ 已被实验否定。
+ \item \textbf{3000 步尚未收敛。}所有最佳点都在预算末端。若预算必须固定，应提高
+  每步信息利用率，而不是只建议继续增加迭代数。
+\end{enumerate}
+
+\section{结论}
+
+在严格不平滑 HPWL、关闭 bundle 的前提下，一般 Adam 方法经过正确尺度校准后，
+可以超过此前的 bundle 结果。机制上，bundle 通过聚合切面抵消极值翻转，但也缩小了
+部分有效当前方向；Adam 保留当前精确 active-set 方向，并用逐坐标二阶矩调节尺度。
+受控 a2 实验给出 6.35\% 的优化器收益，三数据集相对 bundle 均有改善。
+
+动态 $\lambda$ 方面，更标准的投影对偶控制具有清晰约束含义，但固定增益无法兼顾
+初始密度下降与后期边界调节；trajectory PI-D 仍给出最低可行 HPWL。当前最佳方案是
+精确 HPWL + 静电密度 + tuned Adam + trajectory $\lambda$，不是 bundle，也不是
+HPWL 平滑。下一步最有依据的方向是尺度不变的 trust-ratio Adam 与可行性线搜索。
+
+\begin{thebibliography}{9}
+\bibitem{dreamplace}
+Y. Lin, S. Dhar, W. Li, H. Ren, B. Khailany, and D. Z. Pan,
+``DREAMPlace: Deep Learning Toolkit-Enabled GPU Acceleration for Modern VLSI
+Placement,'' \emph{IEEE Transactions on Computer-Aided Design of Integrated
+Circuits and Systems}, vol. 40, no. 4, pp. 748--761, 2021.
+\end{thebibliography}
+
+\end{document}
+

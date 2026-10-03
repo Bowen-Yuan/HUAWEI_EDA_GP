@@ -1,0 +1,103 @@
+question: >
+  Can a proximal aggregate bundle direction exploit exact HPWL extrema changes
+  and improve feasible wirelength without smoothing HPWL?
+status: cycle_complete
+baseline:
+  iterations: 3000
+  hpwl: 79422944
+  overflow: 0.059985
+primary_metric: lowest exact HPWL among states with overflow <= 0.065
+constraints:
+  - HPWL must remain exact max-minus-min
+  - no LogSumExp, gamma annealing, or weighted-average wirelength
+  - command-line behavior remains backward compatible
+hypotheses:
+  H1: proximal aggregate bundle reduces extrema-switching noise
+  H2: retaining a current-cut fraction prevents stale-cut drift
+  H3: bundle benefit is concentrated in fine-grid refinement
+  H8: a 0.0648 guarded-lambda target uses the relaxed 0.065 limit to recover HPWL
+  H9: target headroom and feedback cadence determine whether late HPWL recovery stays feasible
+best_bundle_result:
+  configuration: size2_interval5_prox2_currentmix0.50
+  iterations: 3000
+  hpwl: 75677272
+  overflow: 0.059982
+  improvement_vs_baseline_percent: 4.72
+best_relaxed_result:
+  configuration: size2_interval5_prox2_mix0.50_limit0.065_target0.0648_cooldown0.25
+  iterations: 3000
+  hpwl: 75598872
+  overflow: 0.064875
+  repeat_hpwl: 75637896
+  repeat_overflow: 0.064801
+  improvement_vs_previous_bundle_best_percent: 0.104
+  improvement_vs_heavy_ball_baseline_percent: 4.815
+eight_benchmark_cycle:
+  date: 2026-08-02
+  runs_completed: 8
+  runs_failed: 0
+  iterations_per_run: 3000
+  overflow_reference_limit: 0.10
+  selected_overflow_min: 0.064101
+  selected_overflow_max: 0.071619
+  selected_overflow_mean: 0.0656645
+  total_solver_runtime_sec: 2463.47
+  conclusion: density feasibility transfers; HPWL and lambda scaling do not
+a2a3a4_optimization_cycle:
+  date: 2026-08-04
+  status: cycle_complete
+  iterations_per_promoted_run: 3000
+  overflow_limit: 0.10
+  exact_hpwl_only: true
+  best_method: dreamplace_center_compact_fine_trajectory_bundle_prox3
+  results:
+    adaptec2: {hpwl: 88367088, overflow: 0.099496, improvement_percent: 23.74}
+    adaptec3: {hpwl: 241558528, overflow: 0.099547, improvement_percent: 25.98}
+    adaptec4: {hpwl: 203894144, overflow: 0.099602, improvement_percent: 35.73}
+  dreamplace_table2_reached: false
+  conclusion: initialization dominates; bundle remains useful; lambda refinements are secondary
+gradient_lambda_cycle:
+  date: 2026-08-04
+  status: cycle_complete
+  exact_hpwl_only: true
+  bundle_disabled: true
+  iterations_per_promoted_run: 3000
+  overflow_limit: 0.10
+  best_optimizer: adam_beta1_0p90_beta2_0p99
+  best_controller: trajectory_pid_horizon600_target0p0995
+  results:
+    adaptec2: {hpwl: 87162400, overflow: 0.099536, adam_scale: 5.0, improvement_vs_bundle_percent: 1.36}
+    adaptec3: {hpwl: 230189296, overflow: 0.099492, adam_scale: 5.0, improvement_vs_bundle_percent: 4.71}
+    adaptec4: {hpwl: 201272160, overflow: 0.099143, adam_scale: 3.0, improvement_vs_bundle_percent: 1.29}
+  controlled_adaptec2_heavy_ball_hpwl: 93074656
+  projected_dual_best_screen_hpwl: 93173296
+  projected_dual_best_screen_rate: 5.0
+  dreamplace_table2_reached: false
+  conclusion: tuned Adam beats bundle on all three; trajectory lambda beats guarded and projected-dual controls
+seven_percent_a1a2_cycle:
+  date: 2026-08-04
+  status: cycle_complete
+  exact_hpwl_only: true
+  overflow_limit: 0.0700
+  iterations_per_formal_run: 3000
+  external_reference:
+    adaptec1: {hpwl: 70300000, overflow: 0.0692}
+    adaptec2: {hpwl: 79300000, overflow: 0.0689}
+  best_results:
+    adaptec1:
+      method: amsgrad_scale10_trajectory_target0p0695
+      hpwl: 72576048
+      overflow: 0.0694879
+      repeat_hpwl: 72774024
+      repeat_overflow: 0.0694921
+      gap_to_paper_percent: 3.24
+    adaptec2:
+      method: adam_scale5_trajectory_target0p0698
+      hpwl: 90425320
+      overflow: 0.0697950
+      repeat_hpwl: 90465216
+      repeat_overflow: 0.0698048
+      gap_to_paper_percent: 14.03
+  predictive_lambda_promoted: false
+  late_step_switch_promoted: false
+current_phase: seven_percent_a1a2_cycle_concluded

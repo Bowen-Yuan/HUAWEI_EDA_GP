@@ -1,0 +1,511 @@
+\documentclass[UTF8,fontset=windows,a4paper,11pt]{ctexart}
+\usepackage[margin=2.00cm]{geometry}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{booktabs,tabularx,array,longtable}
+\usepackage{graphicx,float,caption}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage[hidelinks]{hyperref}
+
+\definecolor{accent}{HTML}{0072B2}
+\definecolor{green}{HTML}{009E73}
+\definecolor{warm}{HTML}{D55E00}
+\definecolor{soft}{HTML}{EEF4F7}
+\definecolor{dark}{HTML}{263238}
+\definecolor{muted}{HTML}{607D8B}
+
+\setlength{\parindent}{2em}
+\setlength{\parskip}{0.28em}
+\setlength{\emergencystretch}{2em}
+\setlist{nosep,leftmargin=2em}
+\captionsetup{font=small,labelfont=bf}
+\graphicspath{{../research/bundle_hpwl/experiments/alternative_optimizer_optimization/figures/}}
+
+\pagestyle{fancy}
+\setlength{\headheight}{14pt}
+\fancyhf{}
+\fancyhead[L]{DREAMPlace 基线下的精确 HPWL 优化器与 $\lambda$ 研究}
+\fancyhead[R]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\newcommand{\hpwl}{\operatorname{HPWL}}
+\newcommand{\overflow}{\operatorname{Overflow}}
+\newcommand{\rms}{\operatorname{RMS}}
+\newcommand{\clip}{\operatorname{clip}}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\input{../research/bundle_hpwl/experiments/alternative_optimizer_optimization/generated_results.tex}
+
+\title{\textbf{以 DREAMPlace 论文为目标线的优化器与动态 $\lambda$ 研究}\\
+\large 精确非光滑 HPWL、静电密度、10\% overflow 门槛与 ISPD2005 八实例 3000 步评测}
+\author{HUAWEI\_EDA / alg-electronic 研究报告}
+\date{2026 年 8 月 4 日}
+
+\begin{document}
+\maketitle
+
+\begin{center}
+\colorbox{soft}{\parbox{0.93\textwidth}{
+\textbf{不可违反的建模约束：}本报告所有实验的线长值和线长方向均来自逐网
+$\max x-\min x+\max y-\min y$。没有使用 LogSumExp、weighted-average、
+softmax 极值、$\gamma$ 退火或任何其他 HPWL 平滑。允许平滑的只有逐网格静电密度代理项。
+所有新增优化器和控制器均为 opt-in；不带新参数的旧命令保持原行为。
+}}
+\end{center}
+
+\begin{abstract}
+本轮研究把 DREAMPlace 论文 Table II 的 V100 结果作为主要数值目标线，并采用官方代码默认的
+\code{stop\_overflow=0.1} 作为可行性参考。需要严格区分：论文 Table II/IV 报告的是使用
+weighted-average 线长完成全局布局并经过 legalization/detailed placement 后的 HPWL；本项目报告的是
+静电全局布局状态上重新计算的精确中心 HPWL。因此本文进行的是数值 PK 和机制研究，而不是同流程复现。
+
+在固定 DREAMPlace 风格中心初始化、150 步纯精确 HPWL 和 2850 步 fine-grid 静电优化下，
+我们比较了 normalized subgradient、heavy-ball、Nesterov-EMA、Adam、RMSProp、AMSGrad、
+AdaGrad、filter-trust、DREAMPlace Eq.~18 风格密度权重和 AMSGrad 到 Adam 的硬切换。
+1200 步筛选中，AMSGrad scale 8 得到 88.570M，优于 tuned Adam 的 89.984M；Nesterov-EMA、
+RMSProp 和 AdaGrad 分别为 112.658M、96.986M 和 312.667M。DREAMPlace Eq.~18 更新对调用频率
+高度敏感：interval 1 过度铺开到 6.45\% overflow，interval 25 仍有 37.60\% overflow，
+interval 5 虽可行但 HPWL 为 92.572M，均不如 trajectory PI-D。
+
+八实例统一迁移使用纯 AMSGrad scale 8 和 9.95\% overflow 轨迹，正式选择规则为
+overflow 不超过 10\% 的最低精确 HPWL。统一配置相对 Table II 的几何平均差距为
+\UnifiedGeomeanGap\%，按每个实例当前已测试到的最好优化器计算为 \BestGeomeanGap\%。
+adaptec1 数值上达到 \UnifiedAdaptecOneHPWL M，低于论文目标线 73.22M；这一数值不能解释为
+端到端超越。adaptec3 仍由 Adam 略优，说明 AMSGrad 的单调二阶上界并非跨实例占优。
+主要结论是：在不平滑 HPWL 的前提下，坐标二阶尺度比单纯时间动量或 bundle 历史平均更有效；
+但要继续逼近 DREAMPlace，下一步应优先解决约束边界上的尺度自适应和同口径 LG/DP 评测，而不是继续盲目放大 $\lambda$。
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{研究问题与结论边界}
+
+设可移动单元中心坐标为 $\bm z\in\Omega$，其中 $\Omega$ 为芯片边界。本项目希望在固定预算内求解
+\begin{equation}
+  \min_{\bm z\in\Omega} W(\bm z)
+  \quad\text{s.t.}\quad O(\bm z)\leq 0.10,
+  \label{eq:constrained}
+\end{equation}
+其中 $W$ 是精确 HPWL，$O$ 是本项目按可用面积归一化的 bin excess area。
+每次正式运行最多 3000 个全局迭代，报告最低可行状态而非任意瞬时低 HPWL。
+
+本文回答三个问题：第一，DREAMPlace 论文及官方代码中的 overflow 设定怎样转化为本项目的
+可行性门槛；第二，在精确非光滑 HPWL 下，哪些一阶或坐标自适应方法真正有效；第三，
+同一优化器和 $\lambda$ 控制器能否无实例调参地迁移到八个 ISPD2005 数据集。
+
+本文不声称复现 DREAMPlace。两者至少存在以下差异：
+\begin{enumerate}
+  \item DREAMPlace 全局布局内部使用 weighted-average 平滑线长，本项目始终使用精确 HPWL；
+  \item DREAMPlace Table II/IV 的数值在 DP 后报告，本项目没有同口径 LG/DP；
+  \item 两者的电荷沉积、bin 容量、预条件和 overflow 算子并不完全相同；
+  \item Table II 的 V100 运行时间不能与本机 16 个 OpenMP 线程直接比较。
+\end{enumerate}
+因此，本文把论文值称为“目标线”或“数值基线”，把同一项目、同一初始化、同一预算下的方法比较称为“受控基线”。
+
+\section{DREAMPlace 基线和 overflow 口径}
+
+\subsection{Table II 与 Table IV}
+
+DREAMPlace 论文 Table II 的 V100 HPWL 目标线如下，单位均为 million：
+\begin{center}
+\begin{tabular}{lrrrrrrrr}
+\toprule
+实例 & a1 & a2 & a3 & a4 & b1 & b2 & b3 & b4\\
+\midrule
+Table II & 73.22 & 82.22 & 193.72 & 174.08 & 89.38 & 136.54 & 303.90 & 743.75\\
+Table IV Adam & 73.02 & 82.44 & 191.22 & 172.84 & 89.89 & 136.43 & 302.95 & 740.60\\
+\bottomrule
+\end{tabular}
+\end{center}
+Table IV 还显示 Adam 的平均 HPWL 略优于论文使用的 Nesterov，而 momentum SGD 平均约差 1.2\%。
+论文同时强调，Adam 的收敛速度慢于 Nesterov，并且其学习率衰减对实例敏感。这为本轮测试
+坐标自适应优化器提供了直接依据，但并不意味着论文 Adam 参数可跨目标函数直接复用。
+
+\subsection{为什么采用 10\% 而不是 20\%}
+
+DREAMPlace 官方源码的 \code{params.json} 把 \code{stop\_overflow} 默认值设为 0.1；
+\code{NonLinearPlace.py} 在 overflow 低于该阈值且 HPWL 开始上升时允许停止全局布局。
+论文中的 20\% 出现在 routability-driven placement：当 cell overflow 下降到 20\% 时触发全局布线和膨胀，
+它不是 Table II 的最终可行性阈值。因此本文采用
+\begin{equation}
+  O_{\mathrm{limit}}=10.00\%,\qquad O_\star=9.95\%,
+\end{equation}
+其中 0.05 个百分点是离散迭代和 OpenMP 浮点归约的安全余量。
+
+\section{目标函数：精确 HPWL 加静电密度}
+
+\subsection{绝不平滑的线长项}
+
+对网络 $e$，线长严格定义为
+\begin{equation}
+ W_e(\bm z)=\max_{i\in e}x_i-\min_{i\in e}x_i+
+             \max_{i\in e}y_i-\min_{i\in e}y_i,
+ \qquad W=\sum_e W_e.
+ \label{eq:hpwl}
+\end{equation}
+唯一最大引脚的 $x$ 次梯度为 $+1$，唯一最小引脚为 $-1$，其他引脚为 0；并列极值时在并列引脚间均分符号权重。
+这给出合法次梯度，但极值引脚一旦交换，方向会不连续翻转。此前诊断中相邻两个间隔步的全局次梯度余弦均值约为 $-0.45$，
+说明 active-pin 切换不是偶发噪声，而是优化器必须长期处理的结构。
+
+\subsection{逐网格静电密度}
+
+每个可移动单元作为正电荷，电荷量等于单元面积。面积通过连续核沉积到二维 bin 网格，固定单元占用可用容量。
+去除直流分量后求解
+\begin{equation}
+ -\nabla^2\phi=\rho-\bar\rho,\qquad \bm E=-\nabla\phi,
+ \label{eq:poisson}
+\end{equation}
+并定义静电能
+\begin{equation}
+ U(\bm z)=\frac12\int\rho\phi\,\mathrm dA.
+\end{equation}
+高密度区域产生高电势，电场沿负电势梯度指向低密度区域。把网格电场插值回单元中心即可得到 $\nabla U$。
+因此该模型是“单元沉积到网格、网格求场、网格插值回单元”，而不是逐单元两两计算排斥力。
+
+\subsection{让 $\lambda$ 真正控制密度梯度}
+
+优化方向为
+\begin{equation}
+ \bm g=\bm g_W+\lambda_{\mathrm{eff}}\bm g_U,
+ \qquad \lambda_{\mathrm{eff}}=s\lambda_c,
+ \label{eq:combined}
+\end{equation}
+其中 $\lambda_c$ 是控制器状态。在每个网格阶段首次密度步，用
+\begin{equation}
+ s=\frac{\lVert\bm g_W\rVert_1}{\lVert\bm g_U\rVert_1+\varepsilon}
+ \label{eq:scale}
+\end{equation}
+建立实例级梯度尺度。之后控制器每次改变 $\lambda_c$，都会直接改变加入坐标梯度的
+$\lambda_{\mathrm{eff}}\bm g_U$，而不是只改变日志中的目标函数数值。
+合成方向还会除以全局 RMS；因此 $\lambda_c$ 的绝对数字不能脱离 $s$ 横向比较。
+
+\section{初始化与固定 3000 步流程}
+
+统一初始化对每个可移动单元采样
+\begin{align}
+ x_i&\sim\mathcal N\!\left((x_l+x_h)/2,[0.001(x_h-x_l)]^2\right),\\
+ y_i&\sim\mathcal N\!\left((y_l+y_h)/2,[0.001(y_h-y_l)]^2\right),
+\end{align}
+随机种子固定为 1000，固定单元不动。该尺度与 DREAMPlace 的随机中心微扰同型，但不是其完整初始化流程复现。
+
+正式预算固定为：
+\begin{enumerate}
+  \item 150 步 Phase 0，只优化精确 HPWL，$\lambda=0$；保存该阶段最佳状态；
+  \item coarse 和 medium 阶段均设为 0，把剩余预算全部给 fine grid；
+  \item 2850 步 Phase 3，优化精确 HPWL 与静电密度，动态控制 $\lambda$；
+  \item 每步限制坐标在芯片边界内，运行结束恢复 overflow 不超过 10\% 的最低 HPWL 状态。
+\end{enumerate}
+筛选实验使用相同流程的 1200 步版本，即 150 步 Phase 0 加 1050 步 fine。统一运行使用 16 个 OpenMP 线程。
+
+\section{被测试的优化方法}
+
+\subsection{共同预处理和步长上限}
+
+设合成后并经全局 RMS 归一化的当前坐标梯度为 $g_t$，基础学习率为 $\alpha_t$。
+所有自适应方法最终坐标步都截断到
+\begin{equation}
+ |\Delta z_{t,i}|\leq c_{\max}\alpha_t,
+\end{equation}
+避免某个低二阶矩坐标产生异常跳跃。该操作限制优化器步长，不改变 HPWL 函数或极值。
+
+\subsection{Heavy-ball 与 Nesterov-EMA}
+
+Heavy-ball 实际使用归一化指数动量
+\begin{equation}
+ m_t=\beta m_{t-1}+(1-\beta)g_t,\qquad
+ \Delta z_t=\alpha_t m_t.
+\end{equation}
+Nesterov-EMA 使用
+\begin{equation}
+ \Delta z_t=\alpha_t\left[\beta m_t+(1-\beta)g_t\right].
+\end{equation}
+它让当前次梯度权重高于 heavy-ball，但没有在 look-ahead 位置重新计算目标和梯度，因此不能等同于
+DREAMPlace/RePlAce 的完整 Nesterov accelerated gradient。报告使用“Nesterov-EMA”这一名称避免误导。
+
+\subsection{Adam、RMSProp、AdaGrad 与 AMSGrad}
+
+Adam 的状态为
+\begin{align}
+ m_t&=\beta_1m_{t-1}+(1-\beta_1)g_t,\\
+ v_t&=\beta_2v_{t-1}+(1-\beta_2)g_t^2,\\
+ \Delta z_t&=c\alpha_t\frac{\widehat m_t}{\sqrt{\widehat v_t}+\epsilon}.
+\end{align}
+RMSProp 去掉一阶矩，直接用当前 $g_t$ 除以二阶 RMS；AdaGrad 累加
+$v_t=v_{t-1}+g_t^2$。AMSGrad 在 Adam 上增加
+\begin{equation}
+ \overline v_t=\max(\overline v_{t-1},\widehat v_t),\qquad
+ \Delta z_t=c\alpha_t\frac{\widehat m_t}{\sqrt{\overline v_t}+\epsilon}.
+ \label{eq:amsgrad}
+\end{equation}
+单调二阶上界防止某坐标在 active-pin 瞬态过去后突然放大步长。所有这些状态都在精确次梯度计算之后更新，
+所以它们是“优化方向的时间/坐标滤波”，不是“目标函数平滑”。
+
+\subsection{Filter-trust 与硬切换}
+
+Filter-trust 每隔若干步比较当前点与最近接受点。仅当 HPWL 和 overflow 同时劣化时拒绝当前点、恢复检查点并缩小步长；
+否则接受并缓慢恢复步长。严格版本把两个容差都设为 0、每步检查。
+
+AMSGrad 到 Adam 的硬切换在 fine step 1000 保留一阶和二阶矩，只停止更新/使用单调 $\overline v_t$。
+该试验用于判断 AMSGrad 后期是否因分母只能增大而过度保守。
+
+\section{两类 $\lambda$ 策略}
+
+\subsection{DREAMPlace Eq.~18 风格更新}
+
+官方实现根据相邻 HPWL 变化更新密度权重。令 $\Delta W_t=W_t-W_{t-1}$，则迁移版本使用
+\begin{equation}
+ \mu_t=\begin{cases}
+  1.05\max(0.9999^t,0.98), & \Delta W_t<0,\\
+  \clip\left(1.05^{1-\Delta W_t/W_{\mathrm{ref}}},0.95,1.05\right), & \Delta W_t\geq0,
+ \end{cases}
+ \qquad \lambda_{c,t+1}=\clip(\mu_t\lambda_{c,t}).
+ \label{eq:dream-lambda}
+\end{equation}
+首次达到 10\% 后更新永久冻结，复现官方 update mask 不允许重新激活的思想。
+这一规则的关键问题是“每次调用”的乘法增益和 $W_{\mathrm{ref}}$ 都依赖原求解器尺度；改变调用间隔就改变闭环增益。
+
+\subsection{Trajectory PI-D}
+
+最终采用的控制器先从 fine 阶段初始 overflow $O_0$ 生成 600 步 smoothstep 轨迹
+\begin{align}
+ p_k&=\min(1,k/H),\quad q_k=p_k^2(3-2p_k),\\
+ O_k^{\mathrm{des}}&=O_\star+(O_0-O_\star)(1-q_k),\quad H=600.
+\end{align}
+每 25 个密度步计算位置误差、下降速度误差和截断积分
+\begin{align}
+ e_k&=(O_k-O_k^{\mathrm{des}})/O_\star,\\
+ d_k&=[(O_{k-1}^{\mathrm{des}}-O_k^{\mathrm{des}})-(O_{k-1}-O_k)]/O_\star,\\
+ I_k&=\clip(I_{k-1}+e_k,-3,3),
+\end{align}
+并在对数域更新
+\begin{equation}
+ \lambda_{c,k+1}=\clip\left[
+ \lambda_{c,k}\exp(k_pe_k+k_iI_k+k_dd_k+f_k)
+ \right].
+ \label{eq:pid}
+\end{equation}
+轨迹结束后清空早期积分欠账，切换到边界调节增益，允许 $\lambda$ 双向变化。
+这与 Eq.~\eqref{eq:dream-lambda} 的永久冻结不同，能应对精确 HPWL 引起的持续边界振荡。
+
+\section{1200 步筛选结果}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.96\textwidth]{fig_optimizer_screen.pdf}
+\caption{adaptec2 相同初始化、阶段预算和 trajectory $\lambda$ 下的优化器筛选。
+图中均为 overflow 不超过 10\% 的最低精确 HPWL；AdaGrad 的 312.667M 因尺度过大未放入图中。}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\caption{优化器筛选，HPWL 单位为 million。}
+\begin{tabular}{lrrl}
+\toprule
+方法 & HPWL & Overflow & 结论\\
+\midrule
+Heavy-ball 0.70 & 110.892 & 9.995\% & 时间滤波有效但坐标尺度不足\\
+Nesterov-EMA 0.70 & 112.658 & 9.999\% & 当前方向加权未解决极值翻转\\
+Adam tuned & 89.984 & 9.893\% & 坐标预条件显著有效\\
+RMSProp scale 3 & 96.986 & 9.947\% & 缺少一阶滤波，后期较差\\
+AMSGrad scale 8 & \textbf{88.570} & 9.873\% & 最佳筛选结果\\
+AdaGrad scale 5 & 312.667 & 9.994\% & 累积衰减过强\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.88\textwidth]{fig_amsgrad_scale.pdf}
+\caption{AMSGrad 步长倍率筛选。scale 3 到 8 持续改善，scale 10 开始回退；scale 8 因此被锁定为八实例统一迁移配置。}
+\end{figure}
+
+filter-trust 普通版本接受 102 次、拒绝 0 次，HPWL 为 88.500M；严格版本接受 510 次、拒绝 0 次，HPWL 为 88.673M。
+两者与不带 filter 的差异处于 OpenMP 重复波动量级。该机制在当前轨迹上空转，因为检查点之间没有出现
+HPWL 和 overflow 同时严格劣化的受支配点。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.90\textwidth]{fig_lambda_screen.pdf}
+\caption{固定 AMSGrad scale 8 后的 $\lambda$ 筛选。灰色区域为 overflow 超过 10\% 的不可行区。
+Eq.~18 的调用间隔直接改变闭环乘法增益，只有 interval 5 勉强匹配可行边界，但 HPWL 仍差于 trajectory PI-D。}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\caption{DREAMPlace 风格密度权重与 trajectory PI-D 的 1200 步比较。}
+\begin{tabular}{lrrl}
+\toprule
+控制器 & HPWL & Overflow & 诊断\\
+\midrule
+Trajectory PI-D & \textbf{88.570} & 9.873\% & 最佳边界轨迹\\
+Eq.~18, interval 1 & 94.941 & 6.448\% & 乘法增益过密，过度铺开\\
+Eq.~18, interval 5 & 92.572 & 9.987\% & 可行但恢复效率不足\\
+Eq.~18, interval 25 & 53.828 & 37.60\% & 低 HPWL 不可行\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+这组结果说明可迁移的是 DREAMPlace 的 10\% 可行概念和梯度尺度思想，而不是 Eq.~18 的原始数值增益。
+在目标函数、步长归一化和 update cadence 改变后，直接复制乘法系数没有尺度不变性。
+
+\section{3000 步优化器消融}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig_promoted_convergence.pdf}
+\caption{adaptec2--4 在可行域内的 best-so-far 精确 HPWL。曲线在首次达到 10\% 前留空，避免把不可行低 HPWL 画成有效改进。}
+\end{figure}
+
+\begin{table}[H]
+\centering
+\caption{3000 步受控比较，单位为 million。}
+\begin{tabular}{lrrrr}
+\toprule
+实例 & Adam & AMSGrad & AMSGrad$\rightarrow$Adam & 当前最好\\
+\midrule
+adaptec2 & 87.162 & 86.831 (重复 86.806) & -- & \textbf{86.806}\\
+adaptec3 & \textbf{230.189} & 230.471 & 231.641 & \textbf{230.189}\\
+adaptec4 & 201.272 & \textbf{198.649} & -- & \textbf{198.649}\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+adaptec2 的两个 AMSGrad 重复相差 0.025M，说明约 0.03\% 以内差异不能作强结论。
+adaptec3 的 Adam 只比 AMSGrad 低 0.282M，约 0.12\%，同样属于很窄的优势；
+但硬切换明确回退到 231.641M，说明保留旧矩后突然改变分母规则会破坏已经形成的坐标尺度。
+adaptec4 则显示 AMSGrad 的长期收益：1200 步筛选点仍高于 Adam 截取，3000 步最终反而低 2.623M。
+
+\section{ISPD2005 八实例统一迁移}
+
+\begin{table}[H]
+\centering
+\caption{统一 AMSGrad 与当前实例最好结果对 DREAMPlace 论文目标线的数值 PK。HPWL 单位为 million。
+Gap 为当前最好相对 Table II 的百分比，负值表示数值更低。}
+\small
+\begin{tabular}{lrrlrrrr}
+\toprule
+实例 & 统一 AMSGrad & Overflow & 当前最好方法 & 当前最好 & Table II & Gap & Table IV Adam\\
+\midrule
+\input{../research/bundle_hpwl/experiments/alternative_optimizer_optimization/generated_eight_rows.tex}
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig_eight_pk_ratio.pdf}
+\caption{八实例 HPWL 与 DREAMPlace Table II 的比值。1.0 是论文目标线；蓝色为统一 AMSGrad，橙色为当前已测试方法中的实例最好值。}
+\end{figure}
+
+统一配置的总求解器时间为 \UnifiedRuntimeHours\ 小时。所有八次正式运行均包含 3000 行收敛记录，
+无 NaN/Inf，并且恢复状态 overflow 不超过 10\%。统一配置不针对 bigblue 单独调整 $\beta_1$、$\beta_2$、
+step scale、轨迹长度或目标值，因此该表反映真实迁移能力，而不是每实例事后搜索。
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig_eight_convergence.pdf}
+\caption{八实例统一 AMSGrad 的 fine-grid 收敛过程。红色为当前精确 HPWL，蓝色虚线为 overflow，黑色点线为 10\% 可行门槛。}
+\end{figure}
+
+\section{为什么这些方法成功或失败}
+
+\subsection{AMSGrad 的有效部分}
+
+精确 HPWL 的困难不是梯度不存在，而是稀疏 active pins 高频交换。heavy-ball 只能对所有坐标施加同一个时间滤波；
+Adam/AMSGrad 还能根据每个坐标的历史幅度改变尺度。AMSGrad 进一步保证二阶分母不下降，
+减少某个坐标在短暂离开极值集合后被突然放大的风险。该机制解释了 adaptec2/4 的改进，也解释了为什么 RMSProp
+缺少一阶符号滤波时不够稳定、AdaGrad 的永久累积又过于保守。
+
+\subsection{为什么 AMSGrad 不是全实例必胜}
+
+单调 $\overline v_t$ 会记住早期大梯度。若某个实例的约束边界需要沿早期受抑制坐标继续下降，AMSGrad 后期可能比 Adam 保守。
+adaptec3 的结果正是这种现象的候选证据。不过，简单在固定步数切换到 Adam 并没有恢复性能，说明问题不只是“后期取消 max”。
+更合理的下一步是连续的二阶记忆老化或信赖比控制，而不是硬切换。
+
+\subsection{为什么首次可行不是充分指标}
+
+Projected dual 和 Eq.~18 的试验都表明，更快到达 10\% 可能形成更差的 HPWL-density 轨迹。
+约束边界到达后仍有两千步以上的线长恢复，决定结果的是保持可行时的切向下降效率。
+这也是 trajectory PI-D 胜过一次性冻结和简单倍增/减半的原因：它分别处理密度下降阶段和边界调节阶段。
+
+\section{与 DREAMPlace 目标线仍有差距的原因}
+
+\begin{enumerate}
+  \item \textbf{线长模型不同。}DREAMPlace 用平滑 WA 目标获得稳定 Nesterov 方向，本项目主动保留精确 HPWL 的折点；
+  \item \textbf{报告阶段不同。}论文 Table II/IV 在 DP 后报告，本项目没有同口径 legalizer 和 detailed placer；
+  \item \textbf{约束算子不同。}相同“10\%”不能保证两套 bin 沉积和容量定义给出相同物理拥挤程度；
+  \item \textbf{预算仍在截断下降。}多个正式运行的最好状态出现在最后一个或倒数第二个 fine step；
+  \item \textbf{统一参数仍非完全尺度不变。}梯度范数比解决了第一层尺度，但学习率、二阶矩寿命和反馈 horizon 仍按固定迭代数定义；
+  \item \textbf{随机性和浮点归约。}中心微扰种子固定，但 OpenMP 浮点加法顺序使重复结果仍有约 0.025M 量级差异。
+\end{enumerate}
+
+adaptec1 数值上低于 Table II，并不能推翻这些限制。更低的全局布局中心 HPWL 可能在合法化后增加，
+而论文 DP 后结果也可能受单元对齐、重叠消除和引脚偏移影响。公平结论必须把两边都送入同一 LG/DP 和同一 HPWL 计算器。
+
+\section{下一步建议}
+
+\subsection{优化器建议}
+\begin{enumerate}
+  \item \textbf{连续二阶记忆释放。}不要固定步数从 AMSGrad 切到 Adam；可在 overflow 稳定且 active-set 翻转率下降时，
+  让 $\overline v_t$ 以很小速率向 $v_t$ 收缩，并用信赖上限约束释放速度；
+  \item \textbf{边界切向步。}把合成方向分解为估计密度法向和 HPWL 切向，在 $O\approx10\%$ 时优先保留不增加 overflow 的 HPWL 分量；
+  \item \textbf{坐标信赖比。}用实际位移、预测 HPWL 下降和 overflow 变化调节 step scale，避免仅靠固定 $c=8$ 跨实例；
+  \item \textbf{确定性归约与多重复。}先减少 OpenMP 归约噪声，再对所有八实例做至少三次重复，才能判断 0.1\% 级优化器差异。
+\end{enumerate}
+
+\subsection{$\lambda$ 建议}
+\begin{enumerate}
+  \item 保留 9.95\% 目标和 10\% 选择门槛，不要把论文 20\% routability trigger 当最终 overflow；
+  \item 把控制器增益按更新间隔重标定。interval 从 25 改为 5 时，单次对数增益应近似按 $5/25$ 缩放；
+  \item 用实际密度力比 $\lambda_{\mathrm{eff}}\lVert g_U\rVert/\lVert g_W\rVert$ 做第二层反馈，
+  而不只控制 overflow 误差；
+  \item 给轨迹 horizon 引入实例尺度，例如按首次可行预测或网表规模确定，但必须在独立实例上预先锁定规则；
+  \item 不建议继续直接尝试倍增/减半。离散大跳会在精确 HPWL 边界上形成强振荡，现有对数 PI-D 已明显更稳。
+\end{enumerate}
+
+\subsection{评测流程建议}
+
+若目标是与 DREAMPlace Table II 真正 PK，应补齐统一 legalizer/detailed placer，并同时报告：
+全局布局精确 HPWL、LG 后 HPWL、DP 后 HPWL、overflow 算子定义、合法化位移和总运行时间。
+在此之前，最可信的研发指标仍是本项目内部同初始化、同预算、同 overflow 算子下的受控差分。
+
+\section{可复现性与产物}
+
+正式统一命令的核心参数为
+\begin{verbatim}
+--max-iters 3000 --init dreamplace --p0-iters 150
+--p1-iters 0 --p2-iters 0 --amsgrad
+--adam-beta1 0.90 --adam-beta2 0.99 --adam-step-scale 8.0
+--trajectory-lambda --lambda-horizon 600 --trajectory-target 0.0995
+--overflow-baseline 0.10 --overflow-limit 0.10
+--fine-cooldown-floor 0.25 --gradient-diagnostics
+\end{verbatim}
+
+实验目录保存每次命令、stdout、metadata、\code{nsp\_convergence.csv}、
+\code{lambda\_strategy.csv}、\code{gradient\_diagnostics.csv} 和最终 placement。
+\code{run\_full\_transfer.ps1} 固定八实例迁移参数；
+\code{figures/gen\_research\_figures.py} 直接校验原始运行并生成 CSV、TeX 数值和 PDF/PNG 图。
+
+\section{结论}
+
+本轮在“绝不平滑 HPWL”的硬约束下，把 DREAMPlace 的 10\% overflow 概念成功转化为统一可行性门槛，
+但没有机械复制其 $\lambda$ 乘法增益。AMSGrad scale 8 是筛选中唯一对 tuned Adam 有明确正收益的新优化器，
+并在 adaptec2、adaptec4 上给出更低的 3000 步结果；adaptec3 仍由 Adam 略优，硬切换失败。
+统一八实例结果证明中心初始化、梯度尺度归一化和 trajectory PI-D 能稳定满足 10\%，
+但相对论文目标线的剩余差距仍主要来自边界下降效率和端到端流程不一致。
+
+因此当前最合理的研发路线不是平滑 HPWL，也不是无界增大 $\lambda$，而是：
+保留精确 active-pin 信息，连续调整二阶记忆，在 10\% 边界上构造更高效的近切向下降，
+并补齐同口径 LG/DP 后再判断是否真正达到 DREAMPlace 基线。
+
+\begin{thebibliography}{9}
+\bibitem{dreamplace}
+Y. Lin, Z. Jiang, J. Gu, W. Li, S. Dhar, H. Ren, B. Khailany, and D. Z. Pan,
+``DREAMPlace: Deep Learning Toolkit-Enabled GPU Acceleration for Modern VLSI Placement,''
+\emph{IEEE Transactions on Computer-Aided Design of Integrated Circuits and Systems},
+vol. 40, no. 4, pp. 748--761, Apr. 2021, doi: 10.1109/TCAD.2020.3003843.
+\end{thebibliography}
+
+\end{document}

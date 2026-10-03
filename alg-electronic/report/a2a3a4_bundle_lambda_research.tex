@@ -1,0 +1,494 @@
+\documentclass[UTF8,fontset=windows,a4paper,11pt]{ctexart}
+\usepackage[margin=2.05cm]{geometry}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{booktabs,tabularx,array,longtable}
+\usepackage{graphicx,float,caption}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage[hidelinks]{hyperref}
+
+\definecolor{accent}{HTML}{0072B2}
+\definecolor{green}{HTML}{009E73}
+\definecolor{warm}{HTML}{D55E00}
+\definecolor{soft}{HTML}{EEF4F7}
+\definecolor{dark}{HTML}{263238}
+\definecolor{muted}{HTML}{607D8B}
+
+\setlength{\parindent}{2em}
+\setlength{\parskip}{0.28em}
+\setlength{\emergencystretch}{2em}
+\setlist{nosep,leftmargin=2em}
+\captionsetup{font=small,labelfont=bf}
+\graphicspath{{../research/bundle_hpwl/experiments/a2a3a4_bundle_lambda_optimization/figures/}}
+
+\pagestyle{fancy}
+\setlength{\headheight}{14pt}
+\fancyhf{}
+\fancyhead[L]{严格非光滑 HPWL 的 Bundle 与 $\lambda$ 优化研究}
+\fancyhead[R]{\thepage}
+\renewcommand{\headrulewidth}{0.4pt}
+
+\newcommand{\hpwl}{\operatorname{HPWL}}
+\newcommand{\overflow}{\operatorname{Overflow}}
+\newcommand{\rms}{\operatorname{RMS}}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\title{\textbf{严格非光滑 HPWL 下的 Bundle 与动态 $\lambda$ 优化研究}\\
+\large adaptec2、adaptec3、adaptec4 的 3000 步实验、消融与机制分析}
+\author{HUAWEI\_EDA / alg-electronic 研究报告}
+\date{2026 年 8 月 4 日}
+
+\begin{document}
+\maketitle
+
+\begin{center}
+\colorbox{soft}{\parbox{0.93\textwidth}{
+\textbf{硬约束：}本轮所有线长计算、切平面与优化方向都来自逐网
+$\max x-\min x+\max y-\min y$。没有使用 LogSumExp、weighted-average、
+gamma 退火或任何其他 HPWL 平滑。平滑只存在于静电密度代理项中。
+}}
+\end{center}
+
+\begin{abstract}
+此前统一 bundle 配置在 adaptec2、adaptec3、adaptec4 上分别得到
+115.883M、326.346M、317.243M 的 HPWL，明显高于 DREAMPlace Table II 的
+82.22M、193.72M、174.08M 参考值。本研究在不平滑 HPWL、总预算固定为
+3000 步的条件下，分离考察 overflow 目标、初始化、bundle、动态 $\lambda$
+与阶段预算。最重要的发现不是更大的 bundle，而是初始化不一致：三个数据集
+缺少 \code{eplace-ip.pl}，旧流程直接使用 supplied \code{.pl}。加入与
+DREAMPlace \code{random\_center\_init\_flag} 同型的中心高斯微扰后，
+Phase-0 最优 HPWL 从 127/347/353M 降到 68.8/170.0/165.4M。
+
+最终方法采用 150 步精确 HPWL、2850 步 fine-grid 静电密度优化、600 步
+PI-D overflow 轨迹、两切平面 proximal bundle（prox=3、当前切面混合 0.5），
+得到 88.367M/9.9496\%、241.559M/9.9547\%、203.894M/9.9602\%。相对
+旧结果分别改善 23.74\%、25.98\%、35.73\%。但是，它们仍高于
+DREAMPlace 参考 7.48\%、24.69\%、17.13\%，故本报告明确结论为
+\textbf{显著改进但未达到不同流程的论文参考水平}。诊断还表明，最终 bundle
+梯度 RMS 约为当前精确子梯度的 0.49，密度力/HPWL 力 RMS 仅为
+0.067--0.127；剩余差距不能简单归因于后期 $\lambda$ 过大，而更可能来自
+可行流形上的下降效率、overflow 定义差异及端到端流程差异。
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{研究问题与评价边界}
+
+设可移动单元中心坐标组成向量 $\bm z\in\Omega$，其中 $\Omega$ 为芯片边界。
+本项目求解的是带密度约束的全局布局问题：
+\begin{equation}
+  \min_{\bm z\in\Omega} W(\bm z)
+  \qquad \text{s.t.}\qquad O(\bm z)\leq O_{\max},
+  \label{eq:constrained}
+\end{equation}
+其中 $W$ 是精确 HPWL，$O$ 是本项目按可用面积归一化的 bin excess area。
+本轮主指标锁定为 $O\leq 0.10$ 的状态中最低的精确 HPWL，每个晋升实验最多
+3000 步。
+
+需要特别区分三个概念：
+\begin{enumerate}
+  \item DREAMPlace 论文 Table II 报告的是另一套端到端流程结果；
+  \item DREAMPlace 官方配置的 \code{stop\_overflow=0.1} 是停止参考；
+  \item 本项目的 overflow 分母、密度沉积、容量处理与 DREAMPlace 不完全相同。
+\end{enumerate}
+因此，Table II 数字用于判断量级，而不是受控、同口径 baseline。即使数值相等，
+也不能自动说明算法质量相同；反之，数值未达到也不能只归因于 bundle。
+
+\section{严格非光滑 HPWL}
+
+对网络 $e$，线长严格定义为
+\begin{equation}
+ W_e(\bm z)=\max_{i\in e}x_i-\min_{i\in e}x_i+
+             \max_{i\in e}y_i-\min_{i\in e}y_i,
+ \qquad W=\sum_e W_e.
+ \label{eq:hpwl}
+\end{equation}
+若 $i$ 是唯一 $x$ 最大引脚，则 $\partial W_e/\partial x_i=+1$；若是唯一最小
+引脚，则为 $-1$；其他引脚为 0。并列极值时，代码在并列引脚间均分符号权重。
+该方向是合法次梯度，但当极值引脚切换时会突然翻转。此前测量到相隔两步的
+全局 HPWL 次梯度余弦均值约为 $-0.45$，说明极值切换形成持续的方向冲突。
+
+这一性质解释了两类失败：一是单纯增加 heavy-ball 步长会放大来回切换；二是
+完全使用当前切面（无 bundle）会在可行边界上损失下降效率。本轮再次通过
+no-bundle 配对验证这一点。
+
+\section{静电密度模型与尺度}
+
+\subsection{逐网格的电势与电场}
+
+每个可移动单元作为正电荷，其电荷量等于面积。面积通过连续核沉积到二维 bin
+网格，得到 $\rho(x,y)$；固定单元占用可用容量。去除直流分量后求解 Poisson
+方程
+\begin{equation}
+ -\nabla^2\phi=\rho-\bar\rho,
+ \qquad \bm E=-\nabla\phi,
+ \label{eq:poisson}
+\end{equation}
+并定义静电能
+\begin{equation}
+ U(\bm z)=\frac{1}{2}\int\rho\phi\,\mathrm dA.
+\end{equation}
+高密度区域产生高电势，电场沿负势梯度指向低密度区域。对单元面积核插值电场，
+即可得到 $\nabla U$；这就是把拥挤单元推开的平滑密度方向。电势在网格上求解，
+并非单元两两计算库仑力，因而复杂度和稳定性更适合大规模布局。
+
+\subsection{梯度尺度归一化}
+
+优化方向写成
+\begin{equation}
+  \bm g=\bm g_W+\lambda_{\mathrm{eff}}\bm g_U,
+  \qquad
+  \lambda_{\mathrm{eff}}=\lambda_c s,
+  \label{eq:combined}
+\end{equation}
+其中 $\lambda_c$ 是控制器维护的无量纲权重，$s$ 在每个网格阶段首次密度步按
+\begin{equation}
+ s=\frac{\|\bm g_W\|_1}{\|\bm g_U\|_1+\varepsilon}
+ \label{eq:scale}
+\end{equation}
+初始化。因此，当前代码并非完全没有跨实例梯度归一化。新增的
+\code{--gradient-diagnostics} 进一步记录当前 HPWL、bundle 后 HPWL、密度、
+合成梯度 RMS 及密度力比，避免仅从 $\lambda_c$ 数字猜测物理作用强弱。
+
+\section{Proximal Bundle 如何处理极值切换}
+
+\subsection{合法切平面}
+
+精确 HPWL 是凸的分段线性函数。在历史点 $\bm z_j$ 计算函数值 $W_j$ 与次梯度
+$\bm g_j$ 后，可构造全局下界
+\begin{equation}
+  m_j(\bm z)=W_j+\bm g_j^\mathsf{T}(\bm z-\bm z_j)
+  \leq W(\bm z).
+\end{equation}
+在当前点 $\bm z$，定义 $\beta_j=m_j(\bm z)$。bundle 模型为
+\begin{equation}
+  \widehat W(\bm z+\bm d)=
+  \max_{j\in\mathcal B}\{\beta_j+\bm g_j^\mathsf{T}\bm d\}.
+\end{equation}
+本项目只 bundle 精确 HPWL；密度梯度和 $\lambda$ 每步更新，不进入历史模型，
+避免用过时的密度切面近似一个随控制器变化的目标。
+
+\subsection{近端子问题与切面权重}
+
+方向通过近端模型
+\begin{equation}
+ \min_{\bm d}\ \widehat W(\bm z+\bm d)+\frac{1}{2\tau}\|\bm d\|_2^2
+ \label{eq:proxprimal}
+\end{equation}
+获得。其 simplex 对偶可写为
+\begin{equation}
+ \max_{\bm\alpha\in\Delta}
+ \sum_j\alpha_j\beta_j-
+ \frac{\tau}{2}\left\|\sum_j\alpha_j\bm g_j\right\|_2^2,
+ \quad
+ \Delta=\{\bm\alpha\geq0,\ \bm 1^\mathsf{T}\bm\alpha=1\}.
+ \label{eq:proxdual}
+\end{equation}
+代码用 20 步 Frank-Wolfe 在小 simplex 上求 $\bm\alpha$，形成聚合次梯度
+\begin{equation}
+  \bar{\bm g}=\sum_j\alpha_j\bm g_j.
+\end{equation}
+最终 HPWL 方向仍保留当前极值：
+\begin{equation}
+  \bm g_B=\eta\bm g_{\mathrm{current}}+(1-\eta)\bar{\bm g},
+  \qquad \eta=0.5.
+ \label{eq:mix}
+\end{equation}
+最优配置保留最近两个切面、每 5 步插入、prox 比例 3。两个切面足以表达主要的
+交替 active set；三切面和更强历史混合均没有改善。
+
+\subsection{为什么 bundle 有效但不是万能的}
+
+最终三组运行的 bundle/current HPWL RMS 约为 0.488，最近 200 次切面更新的
+聚合切面范数比约为 0.558，最新切面权重约为 0.588。bundle 确实消除了约一半
+的极值翻转分量。另一方面，这也降低了沿某些当前 active set 的瞬时推进速度。
+如果把当前切面占比提高到 0.65，振荡增加；降到 0.35，则过度保守。结果说明
+当前方法处在“抑制翻转”和“保留瞬时下降”之间的窄平衡区。
+
+\section{动态 \texorpdfstring{$\lambda$}{lambda}：从 guarded 反馈到轨迹 PI-D}
+
+\subsection{目标错配诊断}
+
+此前八数据集实验用 10\% 作为 best-state 参考，却仍把控制器目标固定在 6.48\%。
+这会为不需要的额外密度裕量支付 HPWL。仅把 supplied \code{.pl} 运行的目标改到
+9.8\%，adaptec2/3/4 从 115.883/326.346/317.243M 改善到
+110.524/305.871/304.352M。改善稳定，但只有 4--6\%，说明目标错配不是主因。
+
+\subsection{平滑目标轨迹}
+
+最终控制器在 fine 阶段从初始 overflow $O_0$ 向目标 $O_\star=0.0995$ 生成
+smoothstep 轨迹
+\begin{align}
+ p_k&=\min(1,k/H),\qquad q_k=p_k^2(3-2p_k),\\
+ O_k^{\mathrm{des}}&=O_\star+(O_0-O_\star)(1-q_k),\qquad H=600.
+\end{align}
+位置误差、下降趋势误差和积分误差分别为
+\begin{align}
+ e_k&=\frac{O_k-O_k^{\mathrm{des}}}{O_\star},\\
+ d_k&=\frac{(O_{k-1}^{\mathrm{des}}-O_k^{\mathrm{des}})
+ -(O_{k-1}-O_k)}{O_\star},\\
+ I_k&=\operatorname{clip}(I_{k-1}+e_k,-3,3).
+\end{align}
+控制器在对数域更新
+\begin{equation}
+ \lambda_{c,k+1}=\operatorname{clip}\left(
+ \lambda_{c,k}\exp(k_p e_k+k_i I_k+k_d d_k+f_k),
+ \lambda_{\min},\lambda_{\max}\right).
+ \label{eq:lambda}
+\end{equation}
+相比直接乘 2 或除 2，这一策略同时考虑目标位置和下降速度，且在轨迹结束后清空
+早期积分欠账，转为边界调节。它在 adaptec2 上把首次达到 10\% 从 fine 710
+提前到 530，并将最终 overflow 稳定在 9.95\% 附近。
+
+\section{DREAMPlace 风格初始化}
+
+\subsection{旧初始化的不可比性}
+
+解析器优先加载 \code{<benchmark>.eplace-ip.pl}，否则回退 supplied
+\code{.pl}。工作区只有 adaptec1 提供 ePlace-IP 文件；adaptec2/3/4 因而从
+完全不同的 supplied \code{.pl} 起步。旧结果的 Phase-0 最优 HPWL 为
+127.1M、346.6M、353.3M，已经比论文参考高很多，后续密度优化不可能公平地
+检验 bundle 本身。
+
+\subsection{新增可选初始化}
+
+新增 \code{--init dreamplace}，对每个 movable cell 独立采样
+\begin{align}
+ x_i&\sim\mathcal N\left((x_l+x_h)/2,\ [0.001(x_h-x_l)]^2\right),\\
+ y_i&\sim\mathcal N\left((y_l+y_h)/2,\ [0.001(y_h-y_l)]^2\right),
+\end{align}
+固定随机种子为 1000，固定单元不变。这与 DREAMPlace 的随机中心初始化尺度同型，
+但仍不是其完整初始化/优化流程复现。中心微扰让大量可移动单元的相互 HPWL 很低，
+同时保留由固定端点和小噪声给出的破对称方向。
+
+800 步筛选已显示强信号：adaptec2/3/4 分别为 73.2M@28.1\%、
+179.9M@22.4\%、173.4M@16.0\%。这些状态尚不可按 10\% 排名，但证明新的
+初始 active set 远优于 supplied \code{.pl}，因而晋升至完整 3000 步。
+
+\section{实验协议}
+
+协议在任何新代码和运行之前锁定，主要规则如下：
+\begin{itemize}
+  \item 所有 HPWL 为式\eqref{eq:hpwl}，禁止任何平滑；
+  \item 主指标为本项目 overflow $\leq10\%$ 的最低精确 HPWL；
+  \item 800 步只作发散筛选，晋升方法必须完整运行 3000 步；
+  \item 分离 target、初始化、bundle、控制器和阶段预算，不把组合变化错误归因；
+  \item 保存 convergence、lambda、bundle、gradient diagnostics、stdout 和 placement；
+  \item 正结果与负结果都进入消融表，不删除失败假设。
+\end{itemize}
+
+最终命令结构为：
+\begin{verbatim}
+nsp_placer.exe adaptecX --max-iters 3000 --init dreamplace
+  --p0-iters 150 --p1-iters 0 --p2-iters 0
+  --bundle-hpwl --bundle-size 2 --bundle-interval 5
+  --bundle-prox 3.0 --bundle-current-mix 0.50
+  --trajectory-lambda --lambda-horizon 600
+  --trajectory-target 0.0995 --overflow-baseline 0.10
+  --overflow-limit 0.10 --fine-cooldown-floor 0.25
+  --gradient-diagnostics
+\end{verbatim}
+
+\section{结果}
+
+\subsection{逐步改善与论文参考}
+
+\begin{table}[H]
+\centering
+\small
+\caption{a2/a3/a4 的受控改进。HPWL 单位为 million。论文值为不同流程参考。}
+\begin{tabular}{lrrrrrr}
+\toprule
+数据集 & 旧 6.5\% & 目标对齐 & 中心+guard & 中心无 bundle & 最佳 & 论文参考\\
+\midrule
+adaptec2 & 115.883 & 110.524 & 89.074 & 92.213 & \textbf{88.367} & 82.220\\
+adaptec3 & 326.346 & 305.871 & 243.180 & 258.925 & \textbf{241.559} & 193.720\\
+adaptec4 & 317.243 & 304.352 & 206.646 & 223.772 & \textbf{203.894} & 174.080\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{table}[H]
+\centering
+\small
+\caption{最终最佳状态及相对差距。}
+\begin{tabular}{lrrrrr}
+\toprule
+数据集 & 最佳 HPWL & Overflow & 相对旧结果改善 & 相对论文差距 & 首次 $\leq10\%$ fine 步\\
+\midrule
+adaptec2 & 88.367M & 9.9496\% & 23.74\% & 7.48\% & 530\\
+adaptec3 & 241.559M & 9.9547\% & 25.98\% & 24.69\% & 526\\
+adaptec4 & 203.894M & 9.9602\% & 35.73\% & 17.13\% & 558\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.98\textwidth]{fig_result_progress.pdf}
+\caption{从旧配置到最终方法的逐步 HPWL 改善。DREAMPlace Table II 仅作量级参考。}
+\end{figure}
+
+初始化是最大的单项变化。仅对齐目标获得 4.1--6.3\%；在对齐目标后再使用中心
+初始化获得 19.4--32.1\%；bundle/no-bundle 差异为 4.2--8.9\%。最终的小幅
+trajectory、预算重分配和 prox 调整无法与初始化主效应相比。
+
+\subsection{收敛过程}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig_best_convergence.pdf}
+\caption{最佳配置的 fine-grid 收敛。绿色竖线为首次满足 10\% 的位置；之后
+HPWL 在可行边界附近持续下降，说明 3000 步结束时尚未完全收敛。}
+\end{figure}
+
+三组轨迹具有相同结构：中心初始化先给出低 HPWL、高 overlap 状态；电场增强后，
+HPWL 上升而 overflow 快速下降；约 fine 530--560 达到边界；此后控制器维持
+9.95\% 附近，bundle 沿可行边界恢复线长。a3/a4 在最后 1000 步仍有明显负斜率，
+但剩余 30--48M 差距远大于末段可实现的下降量。
+
+\subsection{梯度机制}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{fig_gradient_diagnostics.pdf}
+\caption{51 步滑动平均的梯度 RMS 比。绿色为 bundle 后/当前 HPWL，粉色为
+加权密度力/bundle HPWL。}
+\end{figure}
+
+bundle 比在早期短暂变化后稳定在 0.49 左右，说明两切面捕获到稳定的交替极值
+模式。密度力比在达到边界前升高，在轨迹结束后降到 0.067--0.127。因此，后期
+方向主要由 HPWL 主导；继续无条件减小 $\lambda$ 不会自动带来几十 million 的
+改善，反而会越过 overflow 边界。
+
+\section{adaptec2 消融与负结果}
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=0.91\textwidth]{fig_a2_ablation.pdf}
+\caption{adaptec2 消融。所有条目均满足 overflow $\leq10\%$，横轴越小越好。}
+\end{figure}
+
+\begin{longtable}{p{0.25\textwidth}p{0.16\textwidth}p{0.50\textwidth}}
+\caption{主要消融的机制解释。}\\
+\toprule
+变化 & HPWL & 结论\\
+\midrule
+\endfirsthead
+\toprule
+变化 & HPWL & 结论\\
+\midrule
+\endhead
+无 bundle & 92.213M & 极值切换未被抵消，首次可行更晚，最终退化。\\
+current mix 0.65 & 90.201M & 当前 active set 占比过高，恢复了过多符号翻转。\\
+current mix 0.35 & 91.548M & 历史聚合过强，方向过于保守。\\
+cooldown floor 0.50 & 89.786M & 后期大步长放大五步 bundle 周期，未加速净下降。\\
+trajectory 9.8\% & 88.825M & 更早可行且稳定，但未充分使用 10\% 头寸。\\
+trajectory 9.95\% & 88.672M & 小幅正结果；边界控制精度优于 guard 脉冲。\\
+去掉 coarse/medium & 88.471M & 多 250 步 fine 恢复，得到小幅改善。\\
+Phase-0 300 步 & 88.496M & 更低无约束 HPWL 不转化为更好约束解。\\
+bundle size 3 & 88.830M & 第三个旧 active set 没有额外价值。\\
+prox 3 & \textbf{88.367M} & 小幅降低历史切面权重波动；收益只有约 0.10M。\\
+\bottomrule
+\end{longtable}
+
+这些结果不支持继续做大范围 bundle 超参数扫描。有效区间是两切面、0.5 当前混合、
+prox 2--3；偏离两侧都会退化。大幅收益应来自新的步骤接受机制或更一致的完整流程，
+而不是再增加一两个切面。
+
+\section{为什么仍未达到 DREAMPlace Table II}
+
+\subsection{初始化问题已解决一部分，但不是完整复现}
+
+中心微扰消除了 supplied \code{.pl} 的主要偏差，却没有引入 DREAMPlace 的完整
+学习率估计、平滑线长、Nesterov 外循环、macro 处理、legalization 与 detailed
+placement。Table II 的 HPWL 不能视为只由初始化决定。
+
+\subsection{overflow 不是同一个统计量}
+
+本项目计算
+\begin{equation}
+ O_{\mathrm{ours}}=
+ \frac{\sum_b\max(A_b-C_b,0)}{A_{\mathrm{available}}},
+\end{equation}
+而 DREAMPlace 的 density-overflow 算子使用不同的沉积与归一化。把两边都写成
+10\% 并不产生数学等价约束。报告没有通过放宽本项目 overflow 来人为追平 HPWL。
+
+\subsection{当前方法缺少 serious/null step 判定}
+
+现有 bundle 每 5 步重算小对偶，但最终仍把聚合方向送入固定归一化 heavy-ball
+步长。经典近端 bundle 更关键的部分是依据模型预测下降与真实函数下降区分
+serious step 和 null step，并据此移动 prox center 或只增加切面。当前代码没有
+这一接受机制，所以 bundle 主要充当方向滤波器，而不是完整的受约束近端算法。
+
+\subsection{固定 3000 步下的后期下降效率}
+
+末段密度力已很小，HPWL 仍持续下降；简单提高 cooldown floor 却退化，表明瓶颈
+不是“步长越大越好”，而是非光滑 active set 切换下的步长接受和可行性维护。
+要在相同预算内再降低 17--25\%，需要更有信息的 serious-step 判定、可行流形
+线搜索或局部重参数化。
+
+\section{代码修改与兼容性}
+
+本轮新增功能全部为 opt-in，旧命令不带新参数时保持原行为：
+\begin{itemize}
+  \item \code{--init dreamplace}：固定种子的 0.1\% 中心高斯微扰；
+  \item \code{--bundle-start-overflow X}：可延迟 bundle 首次激活；
+  \item \code{--lambda-scale-current-hpwl}：允许在 bundle 前锁定密度尺度；
+  \item \code{--gradient-diagnostics}：输出独立梯度分量 CSV。
+\end{itemize}
+本轮最佳命令未依赖后两项改变求解行为；diagnostics 只读出数据。新增初始化与
+预算/控制器参数都通过现有命令行入口调用，没有改变程序基本调用形式。
+
+\section{验证}
+
+以下检查全部通过：
+\begin{itemize}
+  \item \code{mingw32-make -j4}；
+  \item \code{mingw32-make test-electric}；
+  \item \code{mingw32-make test-lambda}；
+  \item \code{mingw32-make test-trajectory}；
+  \item 三组最佳运行均完整包含 3000 个总迭代，无 NaN/Inf；
+  \item \code{src/hpwl.cpp} 不包含 LogSumExp、weighted-average、gamma、
+  softmax 或指数型 HPWL 平滑运算。
+\end{itemize}
+
+\section{下一步建议}
+
+\begin{enumerate}
+  \item \textbf{实现 serious/null-step bundle。}以式\eqref{eq:proxprimal} 的
+  模型下降预测和真实精确 HPWL 下降比决定是否接受 prox center；null step 只
+  增加 active-set 信息，不盲目移动坐标。
+  \item \textbf{加入可行性过滤线搜索。}对候选步同时预测电能与实测 overflow，
+  在 $O\leq10\%$ 附近寻找最大可接受 HPWL 下降，而不是依赖固定 cooldown。
+  \item \textbf{统一比较算子。}在相同 Bookshelf 坐标上复用 DREAMPlace 的
+  overflow 计算与初始化输出，先建立 apples-to-apples 指标，再讨论 Table II 差距。
+  \item \textbf{分离 macro 与标准单元。}a3/a4 的大块固定/可移动结构可能使同一
+  电荷核和动量参数失配；可对 macro 使用独立预条件或较低频 bundle。
+  \item \textbf{做确定性重复。}当前中心采样种子固定，OpenMP 归约仍可能带来
+  小差异。对最终配置至少做 3 次固定线程数重复，再判断 0.1--0.6M 的小改动。
+\end{enumerate}
+
+\section{结论}
+
+本研究没有通过平滑 HPWL 或放宽结果筛选来追求表面数字。最重要的工程结论是：
+此前 a2/a3/a4 的差结果首先是初始化不可比，其次才是 overflow 目标和 bundle
+参数。DREAMPlace 风格中心微扰使三个数据集改善 24--36\%，两切面 bundle 在
+一致初始化下仍贡献 4--9\%，trajectory $\lambda$ 则提供更早、更平稳的边界控制。
+
+最终结果接近 adaptec2 的参考量级，但 adaptec3/4 仍有显著差距。梯度证据排除了
+“后期 $\lambda$ 仍然太大”这一简单解释。下一步应把 bundle 从方向滤波器升级为
+具有 serious/null-step 接受判定的真正近端方法，并统一 overflow/端到端流程；
+继续扩大 bundle 或提高固定步长的预期收益很低。
+
+\begin{thebibliography}{9}
+\bibitem{dreamplace}
+Y. Lin, S. Dhar, W. Li, H. Ren, B. Khailany, and D. Z. Pan,
+``DREAMPlace: Deep Learning Toolkit-Enabled GPU Acceleration for Modern VLSI
+Placement,'' \emph{IEEE Transactions on Computer-Aided Design of Integrated
+Circuits and Systems}, vol. 40, no. 4, pp. 748--761, 2021.
+\end{thebibliography}
+
+\end{document}

@@ -1,0 +1,48 @@
+project: exact-hpwl-dreamplace-pk
+updated: 2026-08-05T20:30:00+08:00
+status: finalizing_800_step_report
+constraints:
+  hpwl: exact_per_net_max_minus_min_only
+  hpwl_smoothing_forbidden: true
+  overflow_limit: 0.0700
+  phase0_iterations: 150
+  iteration_budget: 800
+baselines:
+  adaptec1:
+    hpwl: 70300000
+    overflow: 0.0692
+  adaptec2:
+    hpwl: 79300000
+    overflow: 0.0689
+current_best:
+  adaptec1:
+    hpwl: 68001776
+    overflow: 0.068662
+    initialization: dreamplace_center
+    iterations: 800
+  adaptec2:
+    hpwl: 73808864
+    overflow: 0.069999
+    initialization: eplace_gp_warm_start
+    iterations: 800
+  adaptec2_center:
+    hpwl: 85481160
+    overflow: 0.069653
+    initialization: dreamplace_center
+    iterations: 800
+hypotheses:
+  H0_official_density_alignment: completed_negative
+  H1_extended_recovery: abandoned_budget_violation
+  H2_boundary_projection: pending
+  H3_short_budget_optimizer: completed_positive_warm_start
+  H4_multiscale_density: completed_partial
+  H5_feasible_boundary_trust: completed_positive
+  H7_high_degree_gradient_filter: completed_partial
+  H11_exact_merit_trust: completed_negative
+  H14_bundle_feasible_trust: completed_negative
+notes:
+  - Repository .git directory is empty; protocol commits are unavailable.
+  - Protocol files are immutable preregistration records instead.
+  - Official DREAMPlace ISPD2005 configs use target_density 1.0 and stop_overflow 0.07.
+  - Feasible-boundary trust crosses the adaptec1 reference reproducibly in 800 steps.
+  - adaptec2 crosses only with an explicitly labeled ePlace-GP warm-start; the best center run remains above the reference.

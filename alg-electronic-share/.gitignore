@@ -1,0 +1,14 @@
+# Benchmarks supplied separately
+/ispd2005/
+
+# Local build and generated results
+/build/
+/nsp_placer
+/nsp_placer.exe
+/output/
+/visualizations/
+*.csv
+*.log
+*.gif
+__pycache__/
+*.py[cod]
