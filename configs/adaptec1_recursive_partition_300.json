@@ -1,0 +1,19 @@
+{
+  "rho_target": 0.8,
+  "bin_rows": 8,
+  "coarse_iterations": 2,
+  "coarsen_degree_limit": 64,
+  "initialization_rounds": 16,
+  "initialization_strategy": "recursive_partition",
+  "partition_leaf_bins": 16,
+  "partition_refine_passes": 2,
+  "enable_bin_evacuator": false,
+  "max_iterations": 300,
+  "max_seconds": 1200.0,
+  "threads": 1,
+  "seed": 17,
+  "snapshot_every": 20,
+  "bundle_overflow_percent_limit": 15.0,
+  "bundle_min_proximal_scale_rows": 0.05,
+  "enable_refine": true
+}

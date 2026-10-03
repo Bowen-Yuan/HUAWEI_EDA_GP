@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gpplacer"
+version = "0.1.0"
+description = "Native nonsmooth global placement prototype for ISPD2005 Bookshelf cases"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "numba>=0.59", "matplotlib>=3.7", "Pillow>=9"]
+
+[project.scripts]
+gpplacer = "gpplacer.cli:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

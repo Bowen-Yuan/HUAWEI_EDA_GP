@@ -1,0 +1,14 @@
+{
+  "rho_target": 0.8,
+  "bin_rows": 8,
+  "coarse_iterations": 2,
+  "coarsen_degree_limit": 64,
+  "initialization_rounds": 16,
+  "density_lambda": 200.0,
+  "max_iterations": 100,
+  "max_seconds": 600.0,
+  "threads": 1,
+  "seed": 17,
+  "snapshot_every": 10,
+  "enable_refine": true
+}
