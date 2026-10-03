@@ -1,0 +1,180 @@
+\documentclass[11pt,a4paper]{ctexart}
+
+\usepackage[a4paper,margin=2.35cm]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs,tabularx,array}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{fancyhdr}
+\usepackage{float}
+
+\definecolor{HuaweiRed}{HTML}{C7000B}
+\definecolor{DeepBlue}{HTML}{174A7E}
+\definecolor{LightGray}{HTML}{F3F5F7}
+\hypersetup{colorlinks=true,linkcolor=DeepBlue,urlcolor=DeepBlue}
+\setlength{\parindent}{2em}
+\setlength{\parskip}{0.35em}
+\setlist[itemize]{leftmargin=2em,itemsep=0.25em}
+\setlist[enumerate]{leftmargin=2em,itemsep=0.25em}
+\renewcommand{\arraystretch}{1.25}
+\pagestyle{fancy}
+\setlength{\headheight}{14pt}
+\fancyhf{}
+\fancyhead[L]{难题五：高质量初始解方案设计}
+\fancyhead[R]{HardPlacer}
+\fancyfoot[C]{\thepage}
+
+\title{\textbf{难题五：高质量初始解方案设计}\\[0.4em]
+\large 面向精确 HPWL 与 $6\%$ Overflow 约束的快速构造方法}
+\author{HUAWEI EDA 专题原型}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+当前 adaptec1 存在两个极端初始解：历史解的 HPWL 约为 $55.4$M，但线性 capacity overflow 约为 $51.28\%$；容量均衡解的 overflow 接近零，但 HPWL 接近 $1.97$B。理想初始解应直接落在 overflow 为 $4\%$--$5.5\%$ 的可行邻域，并尽可能保留低 HPWL 结构，从而为后续 ``HPWL--overflow'' 严格交替优化留下余量。本文设计五类候选方案，并给出推荐组合、复杂度和实施顺序。
+\end{abstract}
+
+\section{统一目标与评价口径}
+
+初始解构造阶段采用精确 cell--bin overlap，不使用平滑密度近似。线性 capacity overflow 定义为
+\begin{equation}
+  \mathrm{Overflow}(x)=
+  100\frac{\sum_b\max\!\left(\mathrm{occ}_b(x)-\rho_t A_b^{\mathrm{avail}},0\right)}
+  {\sum_b A_b^{\mathrm{avail}}}.
+\end{equation}
+其中 $A_b^{\mathrm{avail}}$ 已扣除固定块和 blockage。候选解采用字典序筛选：首先要求 $\mathrm{Overflow}\leq5.5\%$，然后在可行解中选择 HPWL 最低者；HPWL 接近时优先选择 active overflow bin 更少、最大 bin density 更低的解。初始解目标设为 $5.5\%$ 而非 $6\%$，用于给后续 HPWL 阶段保留安全余量。
+
+\section{方案一：双锚点插值搜索}
+
+该方案开发量最小、生成速度最快，适合首先验证。设 $x_L$ 为低 HPWL、高 overflow 的历史解，$x_D$ 为低 overflow 的容量均衡解，构造
+\begin{equation}
+  x(\alpha)=(1-\alpha)x_L+\alpha x_D,\qquad \alpha\in[0,1].
+\end{equation}
+
+具体流程如下：
+\begin{enumerate}
+  \item 以 $0.05$ 为步长测试 $\alpha=0,0.05,\ldots,1$，每个候选均进行合法化和精确 oracle 评估。
+  \item 找到第一个满足 overflow 不超过 $5.5\%$ 的点，并在相邻区间内以 $0.002$ 左右的精度细化搜索。
+  \item 保留全部采样结果，不假设 overflow 关于 $\alpha$ 严格单调，因为 cell 跨越 bin 边界时会产生跳变。
+  \item 对最佳候选执行 10--20 轮局部 density 修复，再按可行性和 HPWL 选择最终初始解。
+\end{enumerate}
+
+该方法通常只需 20--30 次完整 oracle 计算，能够复用 $55.4$M 解中的连接结构。主要风险是两个锚点的位置差异过大，中间状态可能出现新的局部热点，因此必须保留精确 overlap 修复阶段。
+
+\section{方案二：连接驱动的容量约束贪婪初始化}
+
+这是最推荐的独立初始化器，不依赖历史布局。将每个 movable cell 分配到一个有容量的 bin，同时使其靠近相连 net 的几何中心。对 cell $i$ 和候选 bin $b$ 定义
+\begin{equation}
+  C(i,b)=\Delta\widehat{\mathrm{HPWL}}(i,b)
+  +\lambda C_{\mathrm{cong}}(i,b)
+  +\mu C_{\mathrm{dist}}(i,b),
+\end{equation}
+其中容量屏障可取
+\begin{equation}
+  C_{\mathrm{cong}}(i,b)=
+  \left(\frac{\mathrm{load}_b+a_i}{\mathrm{capacity}_b}\right)^4.
+\end{equation}
+放入 cell 后超过预留容量的候选 bin 直接禁止。
+
+\subsection{构造步骤}
+\begin{enumerate}
+  \item 建立较粗的 density grid，并使用 $0.72$--$0.76$ 倍 available area 作为构造容量。
+  \item 按大面积、高连接度、连接固定 pin、普通 cell 的顺序放置。
+  \item cell 的目标点由已放置邻居的 net 中心、固定 pin 重心共同决定；无有效邻居时使用 core 中心。
+  \item 在目标点附近搜索 16--32 个有容量的 bin，选择综合代价最低者。
+  \item 全部放置后执行 2--3 轮重新分配，并由精确 overlap oracle 修复边界误差。
+\end{enumerate}
+
+由于 cell 矩形会跨越邻近 bin，构造容量应低于正式目标容量，例如
+\begin{equation}
+  \mathrm{capacity}^{\mathrm{seed}}_b=0.9\rho_t A_b^{\mathrm{avail}}.
+\end{equation}
+预期 overflow 为 $2\%$--$6\%$，复杂度约为 $O(NK+P)$，其中 $K$ 为每个 cell 的候选 bin 数，$P$ 为 pin 数。
+
+\section{方案三：二次布局加容量投影}
+
+首先用 star model 或 clique approximation 求快速二次布局：
+\begin{equation}
+  \min_{x,y}\sum_{(i,j)}w_{ij}
+  \left[(x_i-x_j)^2+(y_i-y_j)^2\right].
+\end{equation}
+固定 instance 和固定 pin 作为锚点，使用共轭梯度迭代 20--50 次。该步骤能快速形成较低线长结构，但会向中心聚集，因此需要容量投影：
+\begin{align}
+  \min_z\quad &\sum_i\lVert z_i-x_i^{\mathrm{quad}}\rVert_1,\\
+  \text{s.t.}\quad &\sum_{i:z_i\in b}a_i\leq\eta\rho_t A_b^{\mathrm{avail}},
+  \qquad \eta\in[0.90,0.95].
+\end{align}
+
+容量投影可用近似 auction 实现：cell 申请最近 bin，超载 bin 提价，将迁移代价最低的 cell 改投其他 bin，直至容量可行，最后执行一轮 net-aware 局部调整。该方案的 HPWL 潜力较高，但需要处理无固定锚点连通分量的奇异性，以及投影对二次布局结构的破坏。
+
+\section{方案四：低 HPWL 种子的代价感知疏散}
+
+该方案直接从 $55.4$M/$51.28\%$ 的历史种子出发，将迁移排序由单纯 overflow 驱动改为单位 overflow 收益的 HPWL 代价：
+\begin{equation}
+  \mathrm{score}(i,b)=
+  \frac{\Delta\mathrm{HPWL}(i,b)}
+  {\Delta\mathrm{Overflow}(i,b)+\varepsilon}
+  +\lambda d(i,b).
+\end{equation}
+
+在 overfull bin 中优先选择低连接度、不位于 net 包围盒极值、面积适中的 cell。目标位置优先位于 cell 的 net 中心附近，并具有足够剩余容量。为控制运行时间，$\Delta\mathrm{HPWL}$ 仅重算 incident nets，$\Delta\mathrm{Overflow}$ 仅更新源、目标附近的局部 bin；每批接受 500--2000 个迁移后运行一次完整 oracle。
+
+该方法能够最大程度保留历史解的局部连接结构，但当原始低 HPWL 主要依赖中心堆叠时，从 $51\%$ 修复到 $6\%$ 仍不可避免地增加大量线长。因此它更适合作为双锚点插值后的局部修复器，而非单独承担全部疏散任务。
+
+\section{方案五：多初始解候选池}
+
+为了降低单个初始化算法对参数的敏感性，可以快速生成小型候选池：
+\begin{itemize}
+  \item 双锚点插值候选 8 个；
+  \item 连接驱动贪婪候选 4 个，使用不同的 $\lambda$ 和容量预留率；
+  \item 二次布局投影候选 2 个；
+  \item 代价感知疏散候选 2 个。
+\end{itemize}
+
+每个候选统一记录 HPWL、线性 overflow、平方密度诊断、最大 bin density 和 active overflow bin 数。禁止用任意线性权重直接混合 HPWL 与 overflow；应先过滤 overflow 可行解，再比较 HPWL。
+
+\section{方案对比与推荐顺序}
+
+\begin{table}[H]
+\centering
+\small
+\begin{tabularx}{\textwidth}{>{\centering\arraybackslash}p{1.0cm} X >{\centering\arraybackslash}p{2.1cm} >{\centering\arraybackslash}p{2.1cm} X}
+\toprule
+优先级 & 方案 & 生成速度 & 实现复杂度 & 主要用途 \\
+\midrule
+1 & 双锚点插值搜索 & 很快 & 低 & 快速获得兼顾 HPWL 和 overflow 的可行候选 \\
+2 & 连接驱动容量贪婪 & 快 & 中 & 正式、独立且可复现的初始化器 \\
+3 & 代价感知疏散 & 中等 & 中 & 保留历史低 HPWL 解的局部连接结构 \\
+4 & 多初始解筛选 & 取决于并行度 & 中 & 提升不同案例与参数下的稳定性 \\
+5 & 二次布局加容量投影 & 中等 & 中高 & 追求更高初始 HPWL 质量 \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\section{推荐组合与实验设计}
+
+优先实施的组合为
+\begin{center}
+\fcolorbox{DeepBlue}{LightGray}{\parbox{0.85\textwidth}{\centering
+双锚点插值搜索 $\rightarrow$ 代价感知局部疏散
+$\rightarrow$ overflow 为 $4.5\%$--$5.5\%$ 的初始解
+$\rightarrow$ HPWL/overflow 严格交替优化。}}
+\end{center}
+
+若要求完全不依赖历史布局，则采用
+\begin{center}
+\fcolorbox{HuaweiRed}{LightGray}{\parbox{0.85\textwidth}{\centering
+连接驱动容量贪婪 $\rightarrow$ 局部二次调整
+$\rightarrow$ 精确 overlap 修复 $\rightarrow$ 严格交替优化。}}
+\end{center}
+
+首轮实验应在相同 bin grid、相同 $\rho_t$、相同固定块处理下比较：初始化耗时、初始 HPWL、overflow、最大 density、交替优化 50 次后的 HPWL，以及达到 $6\%$ 可行域所需时间。最终选择标准应是 ``达到可行域的总时间 + 可行域内 HPWL''，而不只是初始化器自身的单一指标。
+
+\section{结论}
+
+从问题优先和简单性角度，最有性价比的方案是 ``双锚点插值 + 代价感知修复''：它利用现有两个极端解，只需少量 oracle 评估即可探索二者之间的可行前沿。长期正式方案则应采用连接驱动的容量约束贪婪初始化，从源头同时控制容量和连接距离，为后续交替优化提供稳定起点。
+
+\end{document}

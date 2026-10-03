@@ -1,0 +1,10 @@
+{
+  "max_iterations": 40,
+  "max_seconds": 900.0,
+  "target_overflow_percent": 6.0,
+  "anchor_repair_rounds": 12,
+  "anchor_evacuation_rounds": 20,
+  "anchor_max_moves_per_round": 10000,
+  "pressure_repair_rounds": 6,
+  "output_root": "code-hard/runs_density_first"
+}
