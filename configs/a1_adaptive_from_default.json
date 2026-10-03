@@ -1,0 +1,18 @@
+{
+  "runtime": {
+    "max_seconds": 180.0,
+    "max_steps": 100,
+    "seed": 17,
+    "checkpoint_every_steps": 20
+  },
+  "portfolio": {
+    "enabled": false
+  },
+  "joint": {
+    "steps": 100
+  },
+  "visualization": {
+    "enabled": false
+  },
+  "output_root": "combine/results"
+}
