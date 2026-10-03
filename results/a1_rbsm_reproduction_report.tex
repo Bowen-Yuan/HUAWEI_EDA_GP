@@ -1,0 +1,133 @@
+% !TEX program = xelatex
+\documentclass[11pt,a4paper]{ctexart}
+\usepackage[margin=2.35cm]{geometry}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\hypersetup{colorlinks=false,pdfborder={0 0 0}}
+\setlength{\parindent}{2em}
+\setlength{\parskip}{0.35em}
+\renewcommand{\arraystretch}{1.28}
+\setlist[itemize]{leftmargin=2em,itemsep=0.25em,topsep=0.25em}
+\setlist[enumerate]{leftmargin=2.3em,itemsep=0.25em,topsep=0.25em}
+\newcommand{\RBSM}{\textsc{RBSM}}
+\newcommand{\HPWL}{\textsc{HPWL}}
+
+\begin{document}
+\pagestyle{plain}
+\begin{center}
+{\LARGE\bfseries a1（adaptec1）全局布局算法复现报告\par}
+\vspace{0.7em}
+{\small 基于论文\par}
+{\small\itshape An efficient stochastic subgradient method for the global placement\par}
+{\small\itshape problem in very large-scale integration circuits\par}
+\vspace{0.4em}
+{\small 2026 年 7 月 17 日\par}
+\end{center}
+\vspace{0.6em}
+
+\begin{abstract}
+本报告记录了对论文所述随机批量次梯度（\RBSM）全局布局算法的独立实现、在 a1/adaptec1 场景上的复现实验、主要调参过程及失败归因。实现可以稳定完成 Bookshelf 解析、GPU 优化与 \texttt{.pl} 布局输出，并能把 \HPWL{} 优化到论文同一量级；但在三次完整的密度优先实验中，density overflow 稳定在约 53.17\%，显著高于论文 Table 5 的 26.8\%。因此，本次工作复现了算法流程及其可运行实现，但\textbf{没有复现论文在 a1 上的三项联合指标}。
+\end{abstract}
+
+\section{目标、数据与指标}
+
+复现目标是核对论文 Table 5 在 adaptec1 上给出的 85 epoch 结果：\HPWL{} 为 $5.05\times 10^7$、density overflow 为 26.8\%、pre-legalization overlap 为 10.36\%。a1 输入包含 211,447 个对象，其中 210,904 个可移动对象和 543 个固定对象；网络数为 221,142，引脚数为 944,053，核心区域为 $(459,459)$--$(11151,11139)$。输入 \texttt{.pl} 的初始 \HPWL{} 为 104,924,229。
+
+本实现的评测口径如下：
+\begin{itemize}
+  \item \HPWL{}：使用原始半周长线长，并计入引脚 offset。
+  \item density overflow：将每个 bin 超过可用行容量的面积相加，除以可移动单元总面积；固定对象作为容量阻塞。指定分箱下该指标精确计算。
+  \item overlap：可移动对象两两交叠面积除以可移动总面积。极端密集 bucket 中采用有界确定性采样，因此该项只用于诊断，不作为本次成败判定依据。
+\end{itemize}
+
+\section{实现方案}
+
+论文模型由线长项、边界罚项及二维线性 hat 函数表示的局部重叠罚项构成。实现采用算子分裂：先执行 \HPWL{}/均场子步，再执行边界/局部重叠子步。为适配大规模实例，局部相邻对象通过空间网格检索，网络与对象对通过随机批量抽样。
+
+\begin{center}
+\begin{tabular}{p{3cm}p{8.8cm}}
+\toprule
+模块 & 实现决定 \\
+\midrule
+线长 & 原始 \HPWL{}（包含 pin offset）；按网络抽样并进行重要性加权。\\
+重叠 & 二维 hat 重叠罚项；空间网格生成局部候选对，避免 $O(n^2)$ 枚举。\\
+随机性 & 使用近似投影度加权抽样，softmax 温度 50,000；噪声日程为 $0.2/k^3$。\\
+稳定性 & 余弦学习率、稀疏活跃对缓存、单步最大位移裁剪。\\
+固定对象 & 固定位置不更新，仅作为密度容量阻塞。\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+论文存在若干影响实现选择的歧义。式 (8) 的分段定义对应 \texttt{min}，但定理中写为 \texttt{max}；算法 3 对 $f_1,f_2$ 的说明与前文定义互换；更新式写为加号，而收敛式使用减号。本实现主路径采用与分段定义及最小化问题一致的 \texttt{min} 和下降方向（减号），并保留审计模式以便后续比对。
+
+\section{调参过程与结果}
+
+调参遵循“先确认正确性，再确认全量稳定性，最后压低密度”的顺序。所有数值来自实际运行日志。\textit{warm start} 使用已有布局，因此只作为可行性诊断，不能视为严格的论文随机初始化复现。
+
+\begin{longtable}{p{2.7cm}p{4.2cm}p{4.0cm}p{3.2cm}}
+\toprule
+阶段/配置 & 关键设置 & 结果 & 观察 \\
+\midrule
+\endfirsthead
+\toprule
+阶段/配置 & 关键设置 & 结果 & 观察 \\
+\midrule
+\endhead
+随机初始化 smoke & 1 epoch，1 inner step，随机位置 & \HPWL{} $2.214\times10^9$；density 16.71\%（64 bins）；overlap 16.26\% & CUDA 路径和梯度均可执行，但线长离可用状态很远。\\
+输入 \texttt{.pl} 诊断 & 从 Bookshelf 原始位置开始，5 epoch & \HPWL{} $1.0546\times10^8$；重叠约 $4.85\times10^6$ & 大量对象精确重合时，hat 次梯度可以取零，局部斥力难以启动。\\
+线长优先 warm start & $\alpha=5$，85 epoch，25 inner，$lr=5\times10^{-4}$，batch=2\% & \HPWL{} $4.7610\times10^7$；density 57.24\% & 线长优于论文，但均场设置进一步恶化密度。\\
+密度优先短跑 & $\alpha=0$，15 epoch，10 inner，local pairs=200k & \HPWL{} $5.5934\times10^7$；density 53.17\% & 密度很快停在约 53\%，不是单纯迭代次数不足。\\
+密度优先完整三 seed & $\alpha=0$，85 epoch，10 inner，$lr=10^{-3}$，$\gamma=1000$，batch=1\%，200k pairs & seed 2026/2027/2028：density 53.1744\% / 53.1743\% / 53.1777\% & 结果高度一致，问题不是随机种子波动。\\
+\bottomrule
+\end{longtable}
+
+实际尝试过的主要旋钮包括：均场权重 $\alpha$（5 到 0）、学习率（$5\times10^{-4}$ 到 $10^{-3}$）、inner steps（25 到 10）、批量占比（2\% 到 1\%）、局部对上限（5 万到 20 万）、pair refresh（5 到 2）、最大位移（4 到 10）、迭代次数（15 到 85）和随机种子（2026/2027/2028）。增加局部对覆盖、移除均场能够避免密度继续恶化，但均未突破约 53.17\% 的密度平台。
+
+\section{与论文的指标核对}
+
+\begin{center}
+\begin{tabular}{p{3.6cm}r r p{3.5cm}p{2.1cm}}
+\toprule
+方案 & \HPWL{} & density overflow & overlap & 判定 \\
+\midrule
+论文 Table 5 & $5.05\times10^7$ & 26.8\% & 10.36\% & 目标 \\
+线长优先 warm start & $4.7610\times10^7$ & 57.24\% & $5.34\times10^6$（采样） & 仅线长达标 \\
+密度优先，seed 2026 & $5.5872\times10^7$ & 53.1744\% & $3.08\times10^5$（采样） & 未达标 \\
+密度优先，seed 2027 & $5.5909\times10^7$ & 53.1743\% & $3.10\times10^5$（采样） & 未达标 \\
+密度优先，seed 2028 & $5.6095\times10^7$ & 53.1777\% & $2.27\times10^5$（采样） & 未达标 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+完整密度优先三次运行的中位数为 \HPWL{} $5.591\times10^7$、density overflow 53.1744\%。与论文相比，\HPWL{} 高约 10.7\%，density overflow 高约 26.4 个百分点。该差距足以说明论文的三项联合指标未被复现。另一方面，线长优先设置能达到 $4.761\times10^7$ 的 \HPWL{}，说明 Bookshelf 解析、引脚 offset、GPU 优化与输出布局链路是有效的；失败主要集中在全局密度控制。
+
+精确 \HPWL{}、二维重叠梯度与受限步长共 3 个单元测试均通过，且已输出三份完整 \texttt{solution.pl}，可供后续可视化或外部评测。
+
+\section{问题定位}
+
+\begin{enumerate}
+  \item \textbf{局部重叠罚项与全局密度指标不等价。} 论文优化的是局部 hat 斥力，表中报告的却是 bin 容量溢出。两者相关，但没有直接保证；局部重叠下降并不必然使每个 bin 的容量溢出同步下降。
+  \item \textbf{候选对截断削弱了高密区域的斥力。} a1 的潜在近邻对很多。受时间和 4 GB 显存约束，单次最多处理 20 万对并周期刷新；密集区中未被选中的对象无法得到足够的排斥梯度，容易形成高密度平台。
+  \item \textbf{初始化对非凸优化过于关键。} 随机初始化的线长极大；输入 \texttt{.pl} 会产生精确重合、hat 次梯度为零的退化；warm start 能给出较好线长，却不属于严格的论文随机起点。论文没有给出可直接复现的初始位置、随机流、预扩散或多级初始化细节。
+  \item \textbf{论文遗漏了关键工程参数，且存在公式歧义。} 包括密度 bin 的大小/容量定义、pair 采样温度和预算、$\gamma$ 调度、重叠评测器、固定块处理、初始化及停止准则。当前实现为保证可运行而使用了候选对截断、较小批量和位移裁剪，无法等同于论文作者的完整配置。
+\end{enumerate}
+
+因此，合理结论不是“论文错误”，而是：\textbf{在公开描述和当前硬件资源下，独立实现尚不足以可靠复现其 a1 的三项联合数值。}
+
+\section{下一步建议}
+\begin{enumerate}
+  \item 向作者或原始代码核对初始布局、bin 容量、重叠定义、pair 预算及 $\gamma$ 日程。
+  \item 使用与论文一致的官方评测器重新计算各项指标。
+  \item 若目标转为工程可用而非严格复刻，在 \RBSM{} 外加入可微的全局电势/密度力或容量约束，并使用多级扩散初始化。
+  \item 对高密 bin 定向提高候选对覆盖，并做无截断或分块并行实验，判断 53\% 平台是否主要由采样预算造成。
+\end{enumerate}
+
+\noindent\textbf{相关交付物：}\\
+实现：\texttt{dai-code/rbsm\_place}\\
+原始实验报告：\path{dai-code/results/a1_reproduction_report.md}\\
+LaTeX 源文件：\path{dai-code/results/a1_rbsm_reproduction_report.tex}
+
+\end{document}

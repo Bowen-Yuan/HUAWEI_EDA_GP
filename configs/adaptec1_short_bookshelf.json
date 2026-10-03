@@ -1,0 +1,17 @@
+{
+  "mode": "resolved",
+  "epochs": 5,
+  "inner_steps": 5,
+  "lr0": 0.01,
+  "gamma0": 1000.0,
+  "mean_field_alpha": 5.0,
+  "batch_fraction": 0.005,
+  "temperature": 50000.0,
+  "initialization": "bookshelf",
+  "pair_refresh_steps": 5,
+  "max_pairs": 50000,
+  "max_displacement": 12.0,
+  "device": "auto",
+  "density_bins": 64,
+  "seed": 2026
+}

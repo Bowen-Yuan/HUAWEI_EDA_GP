@@ -1,0 +1,18 @@
+{
+  "mode": "resolved",
+  "epochs": 85,
+  "inner_steps": 25,
+  "lr0": 0.0005,
+  "gamma0": 1000.0,
+  "mean_field_alpha": 5.0,
+  "batch_fraction": 0.02,
+  "temperature": 50000.0,
+  "initialization": "warm_start",
+  "warm_start_path": "..\\runs\\adaptec1\\20260713T081941Z\\solution.pl",
+  "pair_refresh_steps": 5,
+  "max_pairs": 50000,
+  "max_displacement": 4.0,
+  "device": "auto",
+  "density_bins": 128,
+  "seed": 2026
+}
