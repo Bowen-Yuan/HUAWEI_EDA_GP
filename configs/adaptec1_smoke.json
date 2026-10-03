@@ -1,0 +1,26 @@
+{
+  "runtime": {
+    "max_seconds": 60.0,
+    "seed": 17,
+    "checkpoint_every_steps": 10
+  },
+  "portfolio": {
+    "enabled": false
+  },
+  "joint": {
+    "steps": 8
+  },
+  "visualization": {
+    "enabled": true,
+    "static_formats": ["png"],
+    "html": true,
+    "snapshot_every_accepted": 5,
+    "snapshot_every_seconds": 60.0,
+    "max_periodic_snapshots": 4,
+    "max_cells_static": 25000,
+    "max_cells_html": 25000,
+    "max_trajectory_points_html": 1000,
+    "max_move_arrows": 500,
+    "dpi": 120
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "portfolio": {"enabled": false},
+  "runtime": {"max_seconds": 45, "seed": 31, "checkpoint_every_steps": 5},
+  "joint": {"steps": 12, "initial_step": 4.0},
+  "visualization": {"static_formats": ["png"], "html": true, "dpi": 120, "max_cells_static": 30000, "max_cells_html": 30000}
+}

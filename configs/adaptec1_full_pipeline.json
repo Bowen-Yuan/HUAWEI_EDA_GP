@@ -1,0 +1,38 @@
+{
+  "runtime": {"max_seconds": 1800.0, "max_steps": null, "seed": 17, "checkpoint_every_steps": 50},
+  "hierarchy": {
+    "enabled": true,
+    "stop_nodes": 12000,
+    "max_levels": 6,
+    "min_reduction_ratio": 0.15,
+    "degree_limit": 64,
+    "level_refine_steps": [20, 30, 50, 80]
+  },
+  "portfolio": {
+    "enabled": true,
+    "heavy_edge_candidates": 8,
+    "partition_candidates": 8,
+    "capacity_candidates": 8,
+    "connection_candidates": 4,
+    "spectral_candidates": 4,
+    "halving_steps": [10, 30, 80],
+    "halving_keep": [16, 8, 4],
+    "max_per_generator_fraction": 0.5,
+    "proxy_enabled": true,
+    "proxy_ridge": 0.001
+  },
+  "joint": {"steps": 520, "initial_step": 4.0},
+  "visualization": {
+    "enabled": true,
+    "static_formats": ["png", "pdf"],
+    "html": true,
+    "snapshot_every_accepted": 50,
+    "snapshot_every_seconds": 60.0,
+    "max_periodic_snapshots": 20,
+    "max_cells_static": 100000,
+    "max_cells_html": 100000,
+    "max_trajectory_points_html": 5000,
+    "max_move_arrows": 2000,
+    "dpi": 220
+  }
+}

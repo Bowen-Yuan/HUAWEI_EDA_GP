@@ -1,0 +1,35 @@
+{
+  "portfolio": {"enabled": false},
+  "runtime": {"max_seconds": 600.0, "seed": 29, "checkpoint_every_steps": 25},
+  "rescue": {
+    "hpwl_enter_norm": 0.15,
+    "hpwl_exit_norm": 0.0635,
+    "overflow_enter_percent": 50.0,
+    "overflow_exit_percent": 50.0,
+    "stable_exit_steps": 3,
+    "block_steps": 20,
+    "max_blocks": 10,
+    "hpwl_rescue_overflow_increase_percent": 2.0,
+    "density_rescue_hpwl_increase_ratio": 0.06,
+    "density_rescue_total_hpwl_ratio": 1.25
+  },
+  "joint": {
+    "steps": 800,
+    "initial_step": 3.0,
+    "lambda_gain": 0.7,
+    "lambda_ema_beta": 0.9
+  },
+  "visualization": {
+    "enabled": true,
+    "static_formats": ["png", "pdf"],
+    "html": true,
+    "snapshot_every_accepted": 50,
+    "snapshot_every_seconds": 60.0,
+    "max_periodic_snapshots": 20,
+    "max_cells_static": 100000,
+    "max_cells_html": 100000,
+    "max_trajectory_points_html": 5000,
+    "max_move_arrows": 2000,
+    "dpi": 220
+  }
+}

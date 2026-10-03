@@ -1,0 +1,123 @@
+% 使用 XeLaTeX 编译：xelatex main.tex
+\documentclass[11pt,a4paper]{ctexart}
+\usepackage[margin=2.1cm]{geometry}
+\usepackage{booktabs,graphicx,amsmath,hyperref,float,array}
+\hypersetup{colorlinks=true,linkcolor=blue,urlcolor=blue}
+\graphicspath{{figures/}}
+\title{自适应 Pareto 软罚布局：完整数值实验报告}
+\author{adaptec1 全局布局实验}
+\date{2026 年 7 月 21 日}
+\begin{document}
+\maketitle
+
+\begin{abstract}
+本文汇总当前自适应 Pareto 软罚布局器的完整实验，以及初始化、短边方向和软罚系数的消融结果。本文以 legacy overflow 作为主结果和与既有文献/旧实现的横向比较指标；strict overflow 仅作为零容量区域占用的安全性补充诊断。完整流程包含多级/portfolio 初始化、正规凸 HPWL 次梯度救援、以及不含独立 overflow rescue 的 $\lambda$ 渐增联合优化。实验表明：初始化已进入 legacy overflow $20$--$30\%$ 区间；$128h_{\rm row}/\sqrt{k}$ 的投影次梯度能有效压低无约束 HPWL；现有 raw-gradient 软罚无法将约 $40\%$ 的 legacy overflow 拉回目标区间。当前所有实验均未同时达到 HPWL $55$--$60$M 与 legacy overflow $20$--$30\%$。
+\end{abstract}
+
+\section{问题定义与评价协议}
+布局区域离散为每 bin 八行的密度网格，目标密度为 $\rho_{\rm target}=0.8$。本文同时保存 legacy overflow 与 strict overflow。设 $M_b$ 为第 $b$ 个 bin 的可移动单元重叠面积，$A_b$ 为可用面积，则主指标为
+\[
+O_{\rm legacy}=\sum_{b:A_b>0}\max(M_b-\rho_{\rm target}A_b,0).
+\]
+严格诊断额外加入零容量 bin 的可移动占用：
+\[
+O_{\rm strict}=O_{\rm positive\ capacity}+A_{\rm movable\ in\ zero\ capacity}/A_{\rm available}.
+\]
+本报告的可行性判断、目标区间和主图均以 legacy overflow 为准。strict 指标用于量化零容量区域占用，并在表中保留以便检查；它不再作为本报告的主优化目标。作为文献可比性依据，参考论文 \emph{An efficient stochastic subgradient method for the global placement problem in very large-scale integration circuits} 的 Table~5 将 overflow 定义为“相对于 placement region capacity 的 density overflow percentage”，未定义零容量 bin 的额外占用项。因此其报告口径不是 strict overflow，而与本文的 legacy 协议最接近；两者的具体 density/overlap 代理仍可能不同。
+
+\section{当前完整求解方案}
+本轮端到端实验严格采用下列三阶段流程。
+\begin{enumerate}
+  \item \textbf{多级初始化与筛选。} 以超图粗化得到多层问题；在粗层以 heavy-edge、划分、容量感知及谱类候选生成多样性初解；经短程优化和轻量代理筛选后逐级反粗化，并在细层进行自适应 Pareto 优化。
+  \item \textbf{HPWL 救援。} 从初始化输出的最低 HPWL 布局出发，彻底关闭 density、$\lambda$、rescue 状态机、单调接受和短边策略。使用归一化投影 HPWL 次梯度，步长为
+  \[\alpha_k=128h_{\rm row}/\sqrt{k},\]
+  其中 $128$ 是此前独立凸 HPWL 实验中已经验证有效的初始步长常数。
+  \item \textbf{联合优化。} 不做任何 overflow-only rescue；联合方向由 HPWL 次梯度与原始 density 梯度组成，$\lambda$ 在 2000 步内以二次日程从 $0$ 增至 $512$。
+\end{enumerate}
+
+\begin{table}[H]\centering
+\caption{本轮完整流程的关键阶段。主结果采用 legacy overflow，strict overflow 为补充诊断。}
+\begin{tabular}{lrrr}
+\toprule
+阶段 & HPWL (M) & Legacy overflow (\%) & Strict overflow (\%)\\
+\midrule
+多级初始化输出 & 127.623 & 21.745 & 30.447\\
+HPWL 救援转折点 & 57.490 & 40.694 & 50.539\\
+$\lambda$ 联合优化终点 & 53.998 & 38.548 & 49.367\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\begin{figure}[H]\centering
+\includegraphics[width=.92\linewidth]{experiment_summary.pdf}
+\caption{所有已观测关键解的 HPWL--legacy overflow 权衡，以及本轮三阶段结果。阴影矩形是用户要求的联合目标区间。}
+\end{figure}
+
+\begin{figure}[H]\centering
+\includegraphics[width=.96\linewidth]{legacy_convergence.pdf}
+\caption{完整流程中 HPWL 救援和 $\lambda$ 渐增联合优化的收敛曲线；纵轴采用 legacy overflow。该过程未调用独立 overflow rescue。}
+\end{figure}
+
+\section{初始化方案评估}
+本轮初始化并非随机撒点，而是一个 ``粗化--候选组合--筛选--反粗化'' 流程。首先以 net 共现关系构造超图，优先合并连接强、规模相容且度数不超过 64 的节点；当相邻层节点数相对父层至少缩减 15\% 时继续粗化。本轮从 $211\,447$ 个节点依次粗化为 $131\,217$、$86\,693$、$60\,695$、$45\,527$、$36\,456$ 与 $30\,785$ 个节点，共六层。
+
+在粗层上，配置生成 8 个 randomized heavy-edge、8 个 randomized partition、8 个 capacity-aware random、4 个 connection-aware 和 4 个 approximate spectral 初解。每个候选先经过 10、30、80 步短程优化；每轮分别保留 16、8、4 个候选，并限制任何生成器的存活比例不超过 50\%。筛选使用静态特征和短程轨迹的 ridge 代理分数，而非高成本完整求解。实际记录中共有 60 条分阶段候选记录：heavy-edge 15 条、partition 22 条、capacity-random 8 条、connection 4 条和 approximate-spectral 11 条。随后按层反粗化，并以 20、30、50、80 步局部细化恢复细层坐标，最后运行 520 步自适应 Pareto 细层优化。
+
+该流程输出的平衡点为 $127.623$M HPWL、$21.745\%$ legacy overflow 和 $30.447\%$ strict overflow。故按本报告选定的 legacy 协议，它已经位于 $20$--$30\%$ 目标带；严格诊断的额外差值来自零容量 bin 中仍有可移动单元占用。它也显著优于仅按容量排空产生的数百 M HPWL 解，说明候选多样性、层级反粗化和代理筛选能形成较好的 wirelength--density 平衡初点。
+
+\subsection{粗化图的构造细节}
+每次粗化首先调用 \texttt{greedy\_heavy\_edge\_groups()}。程序按照 net 的存储顺序扫描超边，仅处理度数在 $[2,64]$ 范围内的 net；在该 net 尚未被占用的 movable pins 中取前两个组成一组。每个 movable 节点最多参加一次匹配，未匹配节点单独成组，fixed 节点始终保持独立，不与 movable 节点合并。需要强调的是，当前 ``heavy-edge'' 是确定性的 net-local 贪心配对，并没有显式累加多条 net 的边权后再求最大权匹配，因此名称所表达的是连接局部性，而非严格的最大重边匹配。
+
+得到父节点映射后，粗节点面积等于子节点面积之和；粗节点高度取子节点最大高度与 row height 的较大者，宽度由 ``总面积/粗节点高度'' 确定。只要组内含 fixed 节点，粗节点即标记为 fixed；粗节点初始坐标取成员原始中心的均值。原超图中的每条 net 被映射到粗节点集合：若所有 pins 坍缩到同一粗节点，则删除该 net，因为它不再贡献粗层 HPWL；否则去重后保留 net 权重，并在粗层重建 node--net CSR 邻接。层级构建在达到六层、节点数低于 12,000，或单层缩减率低于 15\% 时停止。本轮由六层上限终止，最粗层仍有 30,785 个节点。
+
+\subsection{连接锚点与五类候选生成器}
+所有候选都在最粗层生成。基础连接锚点由 \texttt{connectivity\_aware\_seed()} 计算：movable 节点不继承输入 \texttt{.pl} 坐标，而统一从 core 中心开始；fixed terminals 保留物理坐标。每轮先计算各 net 的 pin 中心，再令每个 movable 节点趋向其关联 nets 中心的均值，采用
+\[
+x_i^{(t+1)}=0.35x_i^{(t)}+0.65\,\overline{x}_{\mathcal N(i)},
+\]
+并投影到 core 边界。本轮执行 16 轮。连接到固定端点的分量因而获得绝对方向；没有 fixed-terminal 路径的分量仍靠近 core 中心，后续由容量分配打散。
+
+五类候选的具体实现如下。
+\begin{enumerate}
+  \item \textbf{Randomized heavy-edge（8 个）。} 对连接锚点加入标准差 $0.35$ row height 的二维高斯扰动，随机选择 $8/12/16/20$ 的 macro-bin 粒度，再调用 cluster-capacity 分配。
+  \item \textbf{Randomized partition（8 个）。} 对连接锚点作同样扰动，随机选 $4/8/16$ 个递归叶区域；每次沿当前区域长轴二分，以两侧可用容量约束 heavy-edge cluster 面积，并做两轮局部图割改进。只有当移动 cluster 能减少跨区连接权且不突破目标区容量时才换侧。
+  \item \textbf{Capacity random（8 个）。} 只在可用面积大于零的细 bin 中抽样；bin 被选概率正比于其 available area，随后在 bin 内均匀随机放置。这一生成器强调密度可行性，不保存网络局部性。
+  \item \textbf{Connection（4 个）。} 直接使用 16 轮连接传播坐标并叠加小扰动，不做容量重分配，因而通常 HPWL 较低但 overflow 较高。
+  \item \textbf{Approximate spectral（4 个）。} 为每条 net 产生两个随机信号，每个节点取关联 net 信号的均值，分别按两个信号轴进行稳定排序，再把秩均匀映射到 core 的 $x/y$ 范围。该方法不显式构造节点 Laplacian，也不求特征向量，是廉价的谱草图；之后仍通过 cluster-capacity 分配满足容量倾向。
+\end{enumerate}
+
+\subsection{Cluster-capacity 分配}
+Randomized heavy-edge 与 approximate spectral 共用 \texttt{cluster\_capacity\_seed()}。程序令每个细 bin 容量为 $\rho_{\rm target}A_b$，再汇总成 macro-bin 容量。Heavy-edge clusters 按面积从大到小处理：优先分配到容量足够且离 cluster 连接目标最近的 macro bin；若全部不可容纳，则选择剩余容量最大的 macro bin。在 macro bin 内再次执行同样的 ``最近可容纳细 bin'' 选择。一个 cluster 的成员不被拆开，而是在目标细 bin 中按近似方阵 slot 排列，slot 覆盖 bin 宽高的 55\%。该策略显式平衡 cluster 完整性、连接目标距离和容量，但在所有候选均超容量时采用最大剩余容量回退，因此不是严格合法化器。
+
+\subsection{特征、轻量代理与逐轮筛选}
+每个原始候选计算六个静态特征：$\log(1+\mathrm{HPWL})$、strict overflow、legacy overflow、正容量 bin 利用率方差、movable 布局横向跨度/core 宽度、纵向跨度/core 高度。每轮短程求解后，以 ``overflow 超出 $[20,30]\%$ 的距离 $+10^{-3}\log(1+\mathrm{HPWL})$'' 作为训练目标，使用正则系数 $10^{-3}$ 的标准化闭式 ridge 回归拟合候选潜力；上一轮代理预测还会追加为下一轮特征。候选依次获得 10、30、80 步的 \texttt{AdaptiveParetoSolver} 预算，存活数从 32 缩减到 16、8、4。筛选最多允许同一生成器占据 $\lceil0.5K\rceil$ 个名额，避免候选全部来自单一策略；名额不足时再按综合排序补齐。
+
+这里存在一个与当前报告口径有关的重要实现细节：\texttt{\_score\_values()}、ridge 训练目标和最终 finalist 选择目前仍使用 \textbf{strict overflow} 到 $[20,30]\%$ 的距离，而不是 legacy overflow。也就是说，本报告已经将结果评价切换为 legacy，初始化器本身尚未同步切换选择准则。报告中的 $21.745\%$ legacy 初始点是 strict 导向筛选自然产生的结果，而不是 legacy 专门调优的结果。后续若以论文口径为唯一目标，应将候选排序变量改为 legacy overflow，并保留 strict 作为并列安全特征或二级规则。
+
+\subsection{逐级反粗化与最终选择}
+四个粗层 finalist 从最粗层向细层展开。每个 movable child 继承 parent 坐标，并加入 $[-0.25,0.25]$ row height 的确定性均匀扰动，以打破同组重合；fixed 节点恢复其原始物理位置。每次展开后立即运行局部细化，预算按离最粗层的距离依次取 20、30、50、80 步，超过列表长度的更细层继续使用 80 步；完全恢复到原始图后，再为各 finalist 分配最多 520 步细层自适应 Pareto 优化。所有候选共享 1800 秒总预算，阶段内按剩余时间和候选数动态均分。最终从完成的 finalists 中选择一个：仍先最小化 strict overflow 到目标带的距离，再比较 HPWL；选中结果及其 Pareto archive 作为初始化阶段输出。
+
+\begin{figure}[H]\centering
+\includegraphics[width=.88\linewidth]{../../results_e2e_init/adaptec1/20260721T034317Z/figures/05_candidate_funnel.pdf}
+\caption{多样化候选生成、短程优化与筛选漏斗。该图来自本轮完整初始化。}
+\end{figure}
+
+\section{HPWL 次梯度救援评估}
+从初始化点出发，正规的无约束凸 HPWL 救援在约 57.490M 停止，证明 HPWL 不能下降并不是因为 HPWL 本身不可优化。其代价是 legacy overflow 从 21.745\% 升至 40.694\%。因此，低 HPWL 解与当前密度可行域相距很远；真正困难的是约束问题
+\[
+\min H(x)\quad \mathrm{s.t.}\quad O_{\rm legacy}(x)\leq 30\%,
+\]
+而非无约束 HPWL 的凸优化。
+
+\section{短边方向是否有效}
+从约 55M HPWL 检查点出发，单独的 dominant-axis 短边策略将 legacy overflow 从 $42.264\%$ 降至 $38.945\%$，但 3000 次尝试中只有 7 次被精确 oracle 接受，HPWL 从 $54.998$M 上升到 $77.618$M。结论是：短边方向在局部排出重叠方面有效，却会很快将重叠转移到相邻区域并进入分段线性 plateau；它不适合作为完整 density 求解器，更适合用于 HPWL 预算下的局部候选方向生成。
+
+\section{软罚是否有效}
+直接从 55M 检查点执行 $\lambda_{\max}=256$ 的联合优化，可将 legacy overflow 从 $42.264\%$ 降至 $42.105\%$，同时将 HPWL 降至 $52.461$M。新完整实验中，$\lambda_{\max}=512$ 将 HPWL 从 $57.490$M 降至 $53.998$M，但 legacy overflow 仅从 $40.694\%$ 变为 $38.548\%$。因此软罚并非无效：它能够在小范围内协调两个目标；但 raw-gradient 加权不足以从高 overflow 状态恢复可行性。
+
+作为对照，容量驱动的交替排空可达到 $18.620\%$ legacy overflow，却将 HPWL 推至 $693.380$M；之后的 $\lambda$ 联合阶段仅能回收至 $594.884$M、$19.037\%$。该现象说明瓶颈在于 capacity-only 目的 bin 选择对网络局部性的破坏，而不是简单的 $\lambda$ 取值过小。
+
+\section{结论与下一步}
+现有实验没有产生同时满足 $55$--$60$M HPWL 和 $20$--$30\%$ legacy overflow 的点。下一步应将 density evacuation 改为带精确 HPWL 预算的局部运输：从过载 bin 沿短边逃逸轴生成候选，只考察附近可用 bin；以 $-\Delta O_{\rm legacy}/(\Delta H+\epsilon)$ 和 net barycenter 估计排序；最后以精确 legacy oracle 验收，并强制 $H\leq60$M。随后在 legacy overflow 预算上执行投影 HPWL 次梯度，而非继续增加 raw-gradient 软罚的 $\lambda$；strict overflow 仍作为零容量占用的独立安全诊断保留。
+
+\end{document}

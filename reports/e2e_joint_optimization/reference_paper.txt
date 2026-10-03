@@ -1,0 +1,1561 @@
+Journal of Global Optimization
+https://doi.org/10.1007/s10898-026-01619-4
+
+
+
+
+An efficient stochastic subgradient method for the global
+placement problem in very large-scale integration circuits
+
+Yi-Shuang Yue1,2 · Yu-Hong Dai1,2 · Haijun Yu1,2
+
+Received: 27 December 2024 / Accepted: 21 April 2026
+© The Author(s), under exclusive licence to Springer Science+Business Media, LLC, part of Springer Nature 2026
+
+
+
+Abstract
+The placement problem in Very Large-Scale Integration (VLSI) circuits is a critical step
+in chip design. Its primary goal is to optimize the wirelength of circuit components within
+a confined area while adhering to nonoverlapping constraints. Most analytical placement
+models rely on smooth approximations, thereby sacrificing the accuracy of wirelength esti-
+mation. To mitigate these inaccuracies, this paper introduces a novel approach that directly
+optimizes the original nonsmooth wirelength and proposes an innovative penalty model
+tailored for the global placement problem. Specifically, we transform the nonoverlapping
+constraints into rectified linear penalty functions, allowing for a more precise formulation of
+the problem. Notably, we recast the resultant optimization problem into a form analogous
+to training deep neural network with Rectified Linear Units (ReLU). Leveraging automatic
+differentiation techniques from deep learning, we efficiently compute the subgradient of
+the objective function. This facilitates the application of stochastic subgradient methods to
+solve the model. To enhance the algorithm’s performance, several advanced techniques are
+further introduced, leading to significant improvements in both efficiency and solution qual-
+ity. Numerical experiments were conducted on Gigascale Systems Research Center (GSRC)
+benchmark and International Symposium on Physical Design 2005 (ISPD2005) benchmark
+circuits. The results demonstrate that our proposed model and algorithm achieve significant
+reductions in wirelength while effectively eliminating overlaps. This highlights the poten-
+tial of our approach as a transformative advancement for VLSI placement. Furthermore, we
+establish a rigorous convergence proof for the proposed stochastic subgradient method. To
+the best of our knowledge, it constitutes the first such result for the ReLU-type nonsmooth
+and nonconvex optimization problems.
+
+B Haijun Yu
+    hyu@lsec.cc.ac.cn
+    Yi-Shuang Yue
+    yueyishuang@amss.ac.cn
+    Yu-Hong Dai
+    dyh@lsec.cc.ac.cn
+1   School of Mathematical Sciences, University of Chinese Academy of Sciences, Beijing 100049,
+    China
+2   State Key Laboratory of Mathematical Sciences (SKLMS) and State Key Laboratory of Scientific and
+    Engineering Computing (LSEC), Institute of Computational Mathematics and Scientific/Engineering
+    Computing, Academy of Mathematics and Systems Science, Chinese Academy of Sciences, No. 55
+    Zhongguancun East Road, Haidian District 100190, Beijing, China
+
+
+                                                                                                   123
+                                                                      Journal of Global Optimization
+
+
+Keywords VLSI placement problem · Stochastic subgradient descent method · Nonsmooth
+nonconvex optimization · Penalty method · Rectified linear deep neural networks ·
+Convergence analysis
+
+
+1 Introduction
+
+Circuit placement is a fundamental and critical stage in the physical design of very large-
+scale integration (VLSI) circuits. Its primary goal is to determine the specific locations
+of physical units within a predefined placement area, ensuring that device nonoverlapping
+constraints are satisfied while optimizing key performance metrics such as wirelength, delay,
+and area utilization [1]. The quality of circuit placement has a profound impact on subsequent
+design stages, including post-placement optimization and routing, directly influencing circuit
+performance, power consumption, chip area, manufacturing cost, signal integrity, and so on.
+The placement problem is a typical NP-hard problem [2], necessitating the development of
+advanced algorithms to address its complexity.
+   Existing solutions can broadly be classified into three categories: simulated annealing [3],
+partitioning [4], and analytical methods [5]. The simulated annealing method emulates the
+physical annealing process and gradually optimizes the placement by randomly swapping,
+rotating, or moving modules, assessing the effects of these changes to find the global opti-
+mum. Partitioning methods address the placement problem by recursively dividing large
+instances—comprising net lists and placement regions into smaller sub-problems. Once the
+instance is sufficiently reduced, efficient local optimization algorithms are applied to achieve
+high-quality placements within each partition [6]. Analytical methods leverage linear or
+nonlinear programming techniques to obtain optimal or near-optimal solutions for the place-
+ment problem. By modeling placement objectives and constraints mathematically, analytical
+approaches have emerged as a dominant paradigm for solving VLSI placement problems,
+offering exceptional accuracy and scalability [7].
+   The placement problem can be rigorously formulated as a constrained optimization prob-
+lem, where the primary objective is to minimize the half-perimeter wirelength (HPWL)
+while satisfying nonoverlapping constraints for physical units. Different methodologies for
+approximating and optimizing wirelength have led to the emergence of two major categories
+of placement models: smooth models and nonsmooth models. The smooth model approxi-
+mates the original nonsmooth HPWL using continuously differentiable objective functions,
+such as l p norms [8], log-sum-exp functions [9], and a weighted average model [10]. To
+address the overlap constraints, smoothing techniques like the Gaussian equation [11] and
+the Helmholtz equation [8] are often employed. These techniques relax the problem by trans-
+forming the original nonsmooth optimization into a smooth nonlinear programming problem.
+Smooth models are widely adopted in modern placement solvers, which incorporate penalty
+methods, conjugate gradient methods, and Nesterov’s accelerated techniques for efficient
+optimization. The nonsmooth optimization models directly address the original nonsmooth
+HPWL. The HPWL objective function inherently involves absolute values, which introduce
+nonsmooth and nondifferentiable points, making it a challenging optimization landscape. To
+overcome these difficulties, researchers have developed specialized algorithms tailored for
+nonsmooth structures, such as the conjugate subgradient method [12] and mixed-variable
+optimization [13], which are more adept at handling discontinuities in the gradient caused
+by absolute values.
+
+
+
+
+123
+Journal of Global Optimization
+
+
+    Existing smooth models, while exhibiting high computational efficiency, suffer from lim-
+itations in accuracy due to their reliance on smooth approximations. This limitation becomes
+particularly pronounced in large-scale designs, where approximation errors can accumu-
+late and lead to suboptimal solutions and additional adjustment costs. On the other hand,
+nonsmooth models can accurately represent the original structure of the HPWL, but their
+nondifferentiable objective functions and constraints make conventional gradient-based opti-
+mization methods inapplicable. Therefore, the core motivation of our research is to design
+a solution algorithm that preserves the accuracy of HPWL representation while handling
+nondifferentiable points and maintaining high computational efficiency. In recent years, a
+growing line of work has explored enhancing global placement with high-performance com-
+puting and data-driven methods. GPU-based frameworks such as DREAMPlace 3.0 [14]
+and Xplace [15] exploit parallel modeling and neural components to achieve scalable and
+high-quality placement. More recently, transferable learning has been introduced through
+graph neural networks, as in TransPlace [16], which leverages placement knowledge across
+designs. Beyond these, large language models (LLMs) have been applied to automatically
+discover optimization algorithms and heuristics [17, 18], pointing to an emerging paradigm
+of AI-driven automation in placement research.
+    In this paper, we propose a promising nonsmooth optimization model for VLSI global
+placement. In this model, the objective function is defined as the HPWL wirelength function,
+and the nonoverlapping constraint is characterized by the piecewise-linear hat function related
+to the overlap of the elements, which is free of gradient vanishing and gradient exploding if
+gradient methods are used. Due to the nonconvex and nonsmooth properties of the problem,
+we design a stochastic subgradient (specifically, the generalized gradient of Clarke) descent
+operator splitting algorithm to solve it. The solution procedure is formulated as a neural net
+training problem and is implemented using the deep-learning-based toolkit PyTorch [19].
+Several dedicated techniques are further introduced, including degree-weighted sampling
+based on hypergraphs, adaptive parameter updating, and random disturbance to improve the
+performance and placement effect of the algorithm. In addition, we propose an alternative-
+optimization legalization algorithm by combining wirelength optimization and the de-overlap
+technique, which eliminates overlap while maintaining the advantage of a short wirelength.
+Moreover, we provide a theoretical convergence analysis of the proposed stochastic subgradi-
+ent algorithm, establishing its reliability for nonsmooth optimization in large-scale placement
+problems. We conducted numerical experiments to compare our proposed algorithm with the
+benchmark provided by the Gigascale Systems Research Center (GSRC) [20]. The results
+demonstrate significant improvements in wirelength reduction and overlap elimination. In
+addition, large-scale experiments on the International Symposium on Physical Design 2005
+Placement Benchmarks (ISPD2005) show that our method achieves wirelength and over-
+lap performance comparable to state-of-the-art placement tools. These results highlight the
+advantages and potential of our proposed model and algorithms in solving VLSI placement
+problems.
+    The rest of this article is organized as follows. In the second section, we first present
+the mathematical model for the placement problem, followed by the derivation of the corre-
+sponding penalty function model. The third section is devoted to the stochastic subgradient
+method to optimize the nonsmooth penalty model. The fourth section provides a convergence
+analysis, and the fifth section presents experimental results on the GSRC benchmark and the
+ISPD2005 benchmark. Finally, the last section offers a summary of the article.
+
+
+
+
+                                                                                    123
+                                                                         Journal of Global Optimization
+
+
+2 The placement problem and mathematical models
+
+2.1 The problem definition
+
+A VLSI circuit board can be modeled as a hypergraph G(V , E), where V = {v1 , v2 , . . . , vn }
+denotes the set of cells, each cell vi represents a physical component of the circuit, and
+E = {e1 , . . . , em } denotes the set of nets. Each net ek ∈ E is a subset of V , corresponding
+to a group of cells that are electrically interconnected.
+    Each cell vi ∈ V , for i = 1, . . . , n, is modeled as a rectangular block defined by its width
+wi and height h i . Let (xi , yi ) denote the center coordinates of cell vi . The placement region
+for these cells is a designated rectangular area bounded by the coordinates (0, 0) at the lower
+left corner and (W , H ) at the upper right corner.
+    The objective of the VLSI placement problem is to determine the optimal positions for
+the cells within the placement region such that the total wirelength, measured as the sum
+of the lengths of the nets connecting the cells, is minimized. Additionally, the placement
+must satisfy the constraint that no two cells overlap within the designated area. A mathe-
+matical formulation of the VLSI global placement problem for mixed cells is described as
+follows [21]:
+                                                                          
+        min HPWL(z) :=               max xi − x j  + max  yi − y j  ,                         (1)
+                             e∈E ( i j )                   (vi ,v j )∈e
+         z                          v ,v ∈e
+
+                                   wi + w j                      hi + h j
+                   s.t. xi − x j  ≥              or  yi − y j  ≥            , ∀vi , v j ∈ V , (2)
+                                             2                            2
+                         wi                   wi        hi                  hi
+                             ≤ xi ≤ W −           and      ≤ yi ≤ H − , ∀(xi , yi ) ∈ V .         (3)
+                          2                     2       2                   2
+Here z = (x, y), x = (x1 , . . . , xn ), y = (y1 , . . . , yn ). HPWL stands for half-perimeter wire-
+length. The objective function and constraints specified in the problem (1)–(3) are nonconvex
+and nonsmooth, making it a challenging optimization problem. To overcome these difficul-
+ties, a penalty method is employed to relax the constraints, enabling the reformulation and
+transformation of the problem into a neural network framework. The reformulated problem
+is then optimized using advanced deep-learning-based techniques.
+
+2.2 A rectified linear penalty method
+
+To enforce the boundary condition, we adopt the following penalty terms:
+                                        w                        
+                                            − xi + ReLU xi − wi+
+                                          i
+                  b (xi , yi ) := ReLU
+                                         2
+                                          h                                                    (4)
+                                               − yi + ReLU yi − h i+ ,
+                                             i
+                                   + ReLU
+                                            2
+where wi+ = W − wi /2, h i+ = H − h i /2, ReLU(x) := max(0, x). To enforce the nonover-
+lapping constraints, a straightforward approach introduces the following penalty function:
+                                                            
+                             wi + w j                        wi + w j
+      x xi , x j := ReLU                + xi − x j × ReLU              + x j − xi , (5)
+                                   2                               2
+                                                            
+                              hi + h j                       hi + h j
+        y yi , y j := ReLU              + yi − y j × ReLU              + y j − yi .    (6)
+                                   2                               2
+
+
+123
+Journal of Global Optimization
+
+
+This leads to the following penalty formulation:
+                                                                                                   
+           min HPWL(z) +                       γi b (xi , yi ) +          γi j x xi , x j  y yi , y j ,           (7)
+             z
+                                 (xi ,yi )∈V                        i< j
+
+    γi is
+where                    parameter of term b (xi , yi ), and γi j is the penalty parameter of term
+            the penalty
+x xi , x j  y yi , y j . However, due to the peculiarities of overlapping penalty terms (the
+generalized directional derivative of x  y can be very close to 0), this penalty function model
+may encounter the problem of gradient vanishing during optimization.
+    Alternative approaches exist for constructing the overlap penalty. In [12], the placement
+area is uniformly partitioned into a grid of nonoverlapping bins, and the squared difference
+between the overlapping cell area and the bin area is used as the penalty term. A recent
+work [13], on the other hand, chooses the square root of the overlapping area as the penalty
+term. However, both of these methods suffer from the gradient vanishing issue, which limits
+their effectiveness in optimization.
+    To remove the deficiency of the nonoverlapping penalty, we need to use different penal-
+ties for x  y in (7). We note that (5) and (6) are quadratic polynomials when (2) are not
+satisfied, which implies that the derivatives of the objective can be very small. To remedy
+this, we propose the following two-dimensional piecewise-linear hat function to replace the
+piecewise-quadratic function x  y :
+                                        ⎧
+                                        ⎪
+                                        ⎪ 0,        if |x| ≥ r or |y| ≥ t;
+                                        ⎪
+                                        ⎪
+                                        ⎨     |x|       |y|     |x|
+                          ϕr ,t (x, y) = 1 −      , if       ≤       < 1;                         (8)
+                                        ⎪
+                                        ⎪      r         t       r
+                                        ⎪
+                                        ⎩1 − |y| , if |x| < |y| < 1.
+                                        ⎪
+                                               t         r       t
+Then, a two-dimensional penalty for pairwise overlap can be constructed as
+                                                                  wi + w j          hi + h j
+ x y xi , yi , x j , y j = ϕwi j ,h i j xi − x j , yi − y j , wi j =          , hi j =          . (9)
+                                                                         2                 2
+The new penalty problem can be modeled as
+                                                                                                            
+     min f (z) := HPWL(z) +                         γi b (xi , yi ) +            γi j x y xi , yi , x j , y j .   (10)
+       z
+                                      (xi ,yi )∈V                          i< j
+
+Remark 1 Note that the third term in (10) involves pairwise nonoverlapping penalties, which
+may result in a massive number of terms for large-scale designs. In practice, these terms
+are not evaluated exhaustively at each iteration. Instead, we adopt a stochastic, batch-based
+optimization strategy (detailed in Section 3.1.2) to select a subset of critical nets and their
+associated interactions. This degree-weighted sampling strategy significantly reduces com-
+putational costs while preserving solution quality, making the proposed approach scalable to
+large-scale placement problems.
+
+Remark 2 We can also replace 1 − |x|/r with (r t − t|x|) and 1 − |y|/t with (r t − r |y|) in
+(8), but our numerical experiments show that they lead to similar results.
+
+
+   We note that it can be proven that, with a sufficiently large penalty constant, a one-
+dimensional rectified linear penalty is exact. However, the two-dimensional rectified linear
+penalty for pairwise overlap is not. Let us consider a case presented in Figure 1. In the left
+
+                                                                                                             123
+                                                                                 Journal of Global Optimization
+
+
+
+
+Fig. 1 a) A placement corresponding to a local minimum point of the original problem (1)-(3); b) a small
+perturbation of the placement a, where along certain directions, the HPWL decreases finitely, while the
+directional derivative of the overlap penalty may be arbitrarily small. Therefore, the objective function of the
+penalty model (10) will decrease along this direction, and the nonoverlapping constraint will be violated, no
+matter how large the penalty constant is. In this case, the local minimum of model (10) will not be a local
+minimum of the original problem
+
+
+
+plot, the derivatives with respect to the positions of A and B cells are zero. However, in the
+right plot, a directional derivative of the pairwise nonoverlapping penalty with respect to the
+position of B can be infinitely close to 0; e.g., the directional derivative along a direction d
+which is a small perturbation to the x-direction. Therefore, if the HPWL has a finite nonzero
+gradient along this direction, the nonoverlapping constraint will be violated. Thus, the penalty
+is not exact.
+    Although the new penalty function model is not exact, we can prove that the amplitude of
+nonzero Clarke subgradients of the penalty term has both a lower and an upper bound (see
+Theorem 2), thus avoiding the problems of gradient vanishing and gradient exploding, and
+better optimization results can be obtained. To show this, we first prove that the new penalty
+model (10) can be transformed into a deep ReLU network.
+Theorem 1 The new model f (z) defined in (10) can be formulated as a deep neural network
+with max{log M + 1, 3} ReLU layers, where M = maxe∈E {#e} and #e denote the number
+of elements in a net e.
+
+Proof First, for the absolute value function, we can reformulate it as
+                                     |x| = ReLU(x) + ReLU(−x).
+The maximum of two values can be expressed as a ReLU net with one-hidden layer as
+                       max(a, b) = ReLU(a − b) + b = ReLU(b − a) + a.                                     (11)
+The maximum of 4 values can be expressed as a composition of two layers of ReLU functions
+by (11) and the following identity
+                           max(a, b, c, d) = max(max(a, b), max(c, d)).
+Similarly, the maximum of 2n values can be expressed as a composition of n layers of ReLU
+functions. Thus, the HPWL defined in (1) can be formulated into a deep ReLU neural network
+
+123
+Journal of Global Optimization
+
+
+with log M + 1 ReLU layers. Here x represents the smallest integer that is no smaller
+than x. The boundary penalty (4) is already formulated as a network of one ReLU layer. The
+pairwise penalty (8) can be written as
+                                                                        
+                     ϕr ,t (x, y) = max ReLU(1 − |x|/r ), ReLU(1 − |y|/t) .
+
+Thus, it can be formulated as a neural network with 3 ReLU layers. The summations in (10)
+only affect the width of the network without influencing its depth. The theorem is proved. 
+
+
+   Next, we define the subgradient used in this paper.
+
+Definition 1 (Clarke subgradient [22]) For a locally Lipschitz function F, the Clarke subd-
+ifferential is
+                                                                               
+             ∂ C F(z) = cl conv lim ∇ F(z j ) : z j → z, F differentiable at z j ,
+                                   j→∞
+
+which, for a finite piecewise-affine F, equals the convex hull of the gradients of the active
+pieces at z. An arbitrarily chosen element in ∂ C F(z) is referred to as a (Clarke) subgradient
+of F at z.
+
+Note that for convex and Lipschitz functions, the Clarke subgradient is equivalent to the usual
+subgradient. For differentiable functions, the Clarke subgradient is equivalent to the usual
+gradient. In this sense, we may omit the superscript C in ∂ C F(z) for notation simplicity.
+
+Theorem 2 Define S = {z : 0 ∈ ∂ f (z)}, where ∂ f (z) denotes the Clarke subdifferential of
+the objective defined in model (10). Then
+
+                                                               / S}
+                                 G S c := { s | s ∈ ∂ f (z), z ∈                          (12)
+
+has a positive lower and upper bound.
+
+Proof i) Since f (z) is continuous and piecewise-affine with a finite number of pieces,
+    it is Lipschitz continuous. Consequently, G S c is bounded above by L g , defined as the
+    maximum norm of the gradient vectors across all affine pieces.
+ii) Since there is only a finite number of distinct gradients, the norm of the gradient at
+    any differentiable point z ∈  / S has a uniform positive lower bound. Since the Clarke
+    subdifferential ∂ f (z) at a given point z is a convex hull of a finite number of given
+                    / ∂ f (z), then by the separating hyperplane argument [23], there exists a
+    gradients, if 0 ∈
+    unit vector u z and βz > 0, such that
+
+                                    v, u z  ≥ βz    ∀ v ∈ ∂ f (z).                      (13)
+
+    Since there are only a finite number of affine regions with nonzero gradients to define
+    subdifferentials, we can choose a finite number of different values βz to make (13) hold
+    for any z ∈/ S. Then, there exists β = min βz > 0. Thus, we have v > β, for any
+                   / S, i.e., G S c has a lower bound β. The theorem is proved.
+    v ∈ ∂ f (z), z ∈
+                                                                                           
+
+
+
+                                                                                    123
+                                                                                Journal of Global Optimization
+
+
+
+
+Fig. 2 Analogy between neural network training and placement problem training. The top plot (a) illustrates a
+supervised learning process, and the bottom plot (b) illustrates our method, which is a reinforcement learning
+approach. Both of them utilize back propagation to solve the network training problem
+
+
+2.3 Analogy to deep learning
+
+Both analytic placement and training neural nets are essentially solving nonlinear optimiza-
+tion problems. In the context of supervised learning, neural network training involves feeding
+input data, consisting of feature vectors and corresponding labels, into the network [24]. The
+network computes a loss function based on the predicted and actual values, and optimization
+algorithms are employed to iteratively update the network parameters using gradients. This
+process continues until the loss is minimized and the network accurately predicts the labels
+for the given data. In our placement problem, we directly optimize the objective function
+composed of wirelength and overlap boundary constraint penalties, continuously updating the
+block positions until the objective function is optimized, which can be viewed as a reinforce-
+ment learning approach. Furthermore, a direct analogy can be drawn between the placement
+problem and neural network training; see Fig. 2. The input data instance is replaced with net
+information; the feature vector represents key information such as net connection and block
+information. The label is set to an empty set, and the block positions {(xi , yi )} correspond to
+net parameters. The loss is defined as our objective functions (10), and the parameters, i.e., the
+block positions, are adjusted throughout the training process to minimize the loss function.
+By establishing this one-to-one mapping, the placement problem is effectively reformulated
+as a neural net training problem. This transformation allows the use of deep-learning-based
+techniques to solve placement problems, using forward propagation to compute objectives
+and backward propagation to calculate gradients, thereby enabling the implementation of
+efficient optimization strategies.
+
+
+
+
+123
+Journal of Global Optimization
+
+
+3 The stochastic algorithm
+
+3.1 Random batch splitting method
+
+In the last section, the original constrained optimization problem was reformulated into an
+unconstrained optimization problem using penalty methods. Due to the nonsmooth and non-
+convex nature of the problem, traditional optimization techniques may struggle to efficiently
+identify solutions close to the global minimum. Therefore, we will employ a stochastic sub-
+gradient method to solve this nonsmooth optimization problem. Moreover, we will employ
+the operator splitting method [25] to optimize the interaction function in placement problems.
+This method improves efficiency and precision by decomposing the objective function into
+two components:
+                                     f (z) = f 1 (z) + f 2 (z),                           (14)
+
+where                                                                                                 
+                     f 1 (z) =                 γi b (xi , yi ) +          γi j x y xi , yi , x j , y j
+                                 (xi ,yi )∈V                        i< j
+
+is a short-range component, and
+                                                                                   
+                  f 2 (z) =         e , e :=        max xi − x j  + max  yi − y j 
+                              e∈E                   (vi ,v j )∈e       (vi ,v j )∈e
+
+is a long-range component. The short-range component f 1 mainly addresses the loss caused
+by boundaries and overlap. Since this term is nonzero only when a unit overlaps with others
+or exceeds the boundary, the calculation involving this component can be completed quickly.
+The computational complexity can be reduced from O(N 2 ) to O(N ) by filtering items that
+overlap with the block through meshing. The remote component f 2 is the long-range loss,
+the loss function is bounded, and the calculation amount can be effectively reduced using
+mini-batch techniques.
+    In the subsequent sections, we provide a detailed explanation of the algorithm’s imple-
+mentation, focusing on how additional techniques are combined to effectively optimize the
+placement problem.
+
+
+
+3.1.1 Adaptive parameter adjustment
+
+In penalty-based optimization, the penalty parameters play a critical role in balancing the
+trade-off between the primary objective (e.g., wirelength minimization) and the constraint
+satisfaction (e.g., overlap avoidance). If the penalty parameters are too small, the algorithm
+may ignore constraint violations, producing inaccurate placements. Conversely, excessively
+large parameters can dominate the loss function, causing numerical instability and making the
+optimization trajectory overly sensitive to local perturbations, which may hinder convergence.
+Therefore, both the role and the tuning of penalty parameters are crucial for achieving stable
+and accurate solutions.
+   To address this issue, we adopt an adaptive penalty parameter strategy inspired by [12,
+26]. The key idea is to dynamically increase the penalty for components that contribute most
+to the constraint violation while keeping other penalties moderate, so that the optimization
+focuses on the currently most critical violations without overwhelming the objective function.
+
+                                                                                                             123
+                                                                                 Journal of Global Optimization
+
+
+    Specifically, we initialize all penalty parameters with a uniform value γ0 . Then, at each
+iteration, the penalty parameters are updated as follows:
+                     ⎧                         
+                     ⎨ max        ∂( f 2 )i
+                                                      , if 0 ∈   / ∂(b (xi , yi ))i ,
+                               ∂(b (xi ,yi ))i
+              γ¯i =                                                                                         (15)
+                     ⎩γ0 ,                                  otherwise,
+                      ⎧                                    
+                      ⎨ max              ∂( f 2 )i
+                                                                , if 0 ∈/ ∂(x y (xi , yi , x j , y j ))i ,
+                                ∂(x y (xi ,yi ,x j ,y j ))i
+              γ¯i j =                                                                                       (16)
+                      ⎩γ 0 ,                                       otherwise.
+Here, ∂( f 2 )i denotes the generalized derivatives of the wirelength term f 2 with respect to
+(xi , yi ), and similar definitions apply to the block term b and the pairwise term x y . The
+element-wise division reflects the relative sensitivity of the objective to each constraint; max
+denotes taking the maximum over all directions. The ceiling function · ensures that the
+updated penalty parameter is nondecreasing in practice, which stabilizes the iteration and
+accelerates convergence.
+    This adaptive strategy effectively emphasizes the most critical violations at each step,
+allowing the algorithm to progressively reduce overlap and improve placement quality with-
+out requiring manual tuning of penalty schedules. Experimental results demonstrate that the
+use of rounding via the ceiling function significantly accelerates the algorithm, enhancing
+both computational efficiency and solution quality.
+
+3.1.2 Degree-weighted sampling based on a hypergraph
+
+To improve the efficiency further, we employ a degree-weighted sampling method based on
+a hypergraph to train the net in batches. In this method, each net is represented as a vertex
+in the hypergraph, and an edge is established between two vertices if the corresponding nets
+share a common block.
+    Using this topological structure, the “degree” of each net vertex is defined as the number
+of connections it has with other vertices, reflecting its connectivity density [27]. Higher-
+degree nets are more closely related to other nets, and their optimization is typically more
+challenging. To prioritize the optimization of critical nets, we adopt a sampling strategy that
+gives higher selection probability to nets with larger degrees. Specifically, for the net set
+E = {e1 , . . . , em }, if the degree of the net ei is di , the sampled probability pi of net ei is
+calculated as follows:
+                                                   edi /T
+                                         pi = m         d j /T
+                                                                ,                             (17)
+                                                  j=1 e
+where T is a constant parameter resembling temperature. This weighted sampling strategy not
+only improves computational efficiency but also ensures that sufficient attention is directed
+toward key nets. Consequently, it accelerates overall convergence while maintaining high
+solution quality. The algorithm of degree-weighted sampling is as follows (Algorithm 1):
+
+
+Algorithm 1 Degree-weighted sampling
+1: Create a mapping for each terminal to record which nets contain the terminal.
+2: Build the hypergraph of mapping and calculate the degree of the vertices.
+3: Calculate the sampling probability for each net using formula (17).
+4: Sample from the full net E with probability obtained from step 3.
+
+
+
+
+123
+Journal of Global Optimization
+
+
+3.1.3 Mean-field force
+
+To achieve a more compact arrangement of blocks, a regularization term known as “mean-
+field force” [28] is incorporated into the objective function. This term is designed to reduce
+the distance between each block and the center of the placement region, thereby promoting
+tighter block placement. The regularization term is defined as:
+                                                                     2
+                            Emean =    α (xi , yi ) − (xmean , ymean )2 .
+                                      vi ∈V
+
+
+Here, α is the force parameter. (xmean , ymean ) represents the average position of all blocks.
+By incorporating this regularization term into the optimization process, the arrangement of
+blocks becomes more balanced, thereby reducing the overall placement area and significantly
+decreasing the total wirelength. Moreover, the inclusion of this term accelerates convergence
+to a stable configuration and mitigates the risk of being trapped in local minima.
+
+
+
+3.1.4 Incorporation of random disturbance
+
+One of the main challenges of nonconvex optimization problems is the potential to become
+trapped in local minima. To address this issue and promote a more comprehensive explo-
+ration of the solution space, we have integrated a stochastic process into our algorithm. These
+stochastic components are designed to introduce randomness, thereby enhancing the algo-
+rithm’s ability to escape local minima. The key stochastic components are implemented as
+follows:
+
+1. Random initialization: Initial coordinates (xi0 , yi0 ) are randomly sampled from a spec-
+   ified range to enhance the diversity of initial configurations.
+2. Incorporation of random forcing: By adding Gaussian random disturbances to the
+   gradient, noise is introduced into the optimization process of the algorithm, which can
+   effectively help the optimization escape local minima [29]. The algorithm for adding
+   random perturbations can be summarized as Algorithm 2:
+
+
+Algorithm 2 Gaussian random disturbance
+1: for Step k do
+2:    Calculate the subgradient g of loss function.
+3:    Generate a Gaussian random vector η with the same shape as the subgradient.
+4:    Calculate the perturbation coefficient by  = 0.2/k 3 .
+5:    Add perturbation and update subgradient by:
+
+                                              g = g +  g η.
+
+6: end for
+
+
+
+
+By incorporating these stochastic ingredients, the algorithm has enhanced its efficiency in
+exploring the solution space, thereby increasing the likelihood of identifying globally optimal
+or near-optimal solutions.
+
+                                                                                    123
+                                                                              Journal of Global Optimization
+
+
+3.2 The overall random batch splitting algorithm
+
+Combining all the above details, our algorithm can be summarized as Algorithm 3, which
+we refer to as the random batch splitting method (RBSM).
+
+
+Algorithm 3 RBSM for function (14)
+1: Input: itermax , tolerance hpwl = 0.0001, overlap = 2%;
+2: Output: Optimal placement position (x ∗ , y ∗ );
+3: k ← 0.             
+4: Initialize x 0 , y 0 randomly and set initial learning rate lr = lr0 = 0.1.
+5: while k < itermax do
+6:    Split f (z) into two parts: distance term f 1 and penalty term f 2 .
+7:    Calculate γik and γikj using equations (15), (16).
+8:    for step = 1 to 25 do
+9:        Sample from E by Algorithm 1 to obtain batch E q .
+10:        for batch E q do
+11:           Compute distance loss f 1 and get subgradient via automatic differentiation.
+12:           Add random perturbations by Algorithm 2 and update positions using a gradient method:
+
+                                     (x, y) ← (x, y) + lr ∗ (g +  g η).
+
+13:           Compute penalty term f 2 and get subgradient via automatic differentiation.
+14:           Add random perturbations to update positions using a gradient method similarly.
+15:        end for
+16:   end for            
+17:   Get x k+1 , y k+1 after all steps.
+                                       
+18:   lr ← lr0 × 1 + cos iter     π ×k      /2.
+                                   max
+           HPWL(x k ,y k )         
+19:   if                      − 1 < εhpwl and ratiooverlap < εoverlap then
+            HPWL(x k+1 ,y k+1 )
+                                                  
+20:        Stop and return (x ∗ , y ∗ ) = x k , y k .
+21:   end if
+22:   k ←k+1
+23: end while
+
+
+
+    In the position update phase, distance loss and penalty are calculated separately, enabling
+two targeted position updates. This approach allows for more effective and focused adjust-
+ments to overlap and wirelength. After each update of γ , the model is trained until the local
+minimum is reached. Based on experimental results, it was observed that stochastic gradient
+descent (SGD) typically converges to a local minimum within 25 iterations. Therefore, a fixed
+iteration count of 25 is used instead of a variable stopping criterion. To update the learning
+rate, we adopt the cosine annealing schedule from PyTorch, which gradually reduces the
+learning rate over iterations. This scheduling strategy helps improve convergence stability
+and avoid oscillations near local minima. At last, we adopted a practical and reasonable
+termination criterion commonly used in analytical placement
+                                                                              is to stop the
+                                                                 methods, which
+                                                         HPWL(x k ,y k )     
+algorithm when the target HPWL satisfies condition  HPWL(x k+1 ,y k+1 ) − 1 < εhpwl and the
+overlap ratio meets ratiooverlap < εoverlap = 2%.
+    The dominant cost is the penalty term f 2 . With mini-batching, let M be the total number
+of nets, b the batch size (nets per batch), S = 25 the number of inner steps per outer iteration,
+and K the number of outer iterations. Each inner step evaluates f 2 on one batch, costing
+O(b2 ) (pairwise interactions inside the batch), while f 1 and perturbations cost O(b). Hence,
+
+123
+Journal of Global Optimization
+
+
+the overall complexity is                         
+                                            O K Sb2 .
+
+If the S inner steps in one outer iteration visit disjoint batches that together cover all nets (so
+S = M/b), this becomes                                    
+                                     O K Sb2 = O K Mb ,
+
+which is linear in M for fixed b. Therefore, the mini-batched implementation removes the
+quadratic dependence on the total number of nets, and f 2 remains the primary computational
+bottleneck within each batch.
+
+3.3 Alternate-optimization legalization
+
+Due to the fact that the penalty is not exact, overlaps cannot be entirely eliminated during the
+global placement stage. Thus, further de-overlapping is required in the legalization phase.
+Typically, traditional legalization focuses solely on eliminating overlaps, which might lead to
+a significant increase in wirelength. To address this, we use a strategy that alternates between
+optimizing overlap and minimizing distance loss. This method simultaneously reduces over-
+lap and prevents significant increases in wirelength. Initially, the algorithm calculates distance
+loss and updates positions to reduce the distance between components. It then assesses the
+overlap penalty, calculates gradients via automatic differentiation, and updates positions
+based on calculated steps to minimize overlaps. This process of alternating updates con-
+tinues until overlaps are eliminated and distance stabilization is achieved. We note that for
+the rectified linear penalty, the legalization of nonoverlapping can be made exact in one
+step for individual pairwise constraints if these constraints are not coupled. However, due
+to the existence of coupled non-overlapping constraints in dense layouts, multiple rounds of
+legalization iterations are necessary.
+    The specific steps are given in Algorithm 4.
+
+
+4 Convergence analysis of the RBSM algorithm
+
+We analyze the stochastic subgradient iteration underlying Algorithm 3. Let f (z) be our
+nonsmooth, nonconvex objective with z = (x1 , y1 , . . . , xn , yn ) ∈ R2n . One outer iteration
+performs M inner updates (we use M = 25 in practice) on mini-batches E q . Index the overall
+run by k = t M + m (t ∈ N, m ∈ {0, . . . , M − 1}) and set z k = z t,m . Each inner update can
+be written as
+
+              z k+1 = z k − αk (gk + k gk ηk ) = z k − αk (gk + ξk ) = z k − αk ĝk ,        (18)
+
+where gk is a (mini-batch, importance-weighted) subgradient estimator of f at z k , ηk ∼
+N (0, I ) is independent of the past, and k = 0.2/k 3 is the perturbation coefficient from
+Algorithm 2.
+   Here we decompose our objective function into the form of the sum of boundary constraints
+and other functions, that is, f = f 0 + f b , where f b is finite boundary constraints
+
+            
+            n
+                         w                        h                     
+                              −xi +ReLU xi − wi+ +ReLU      − yi +ReLU yi − h i+ .
+                            i                             i
+f b (z) =         γi ReLU
+                           2                            2
+            i=1
+
+
+                                                                                         123
+                                                                                             Journal of Global Optimization
+
+
+Since f 0 and f b are sums of finite numbers of piecewise-linear functions, their subgradients
+are bounded; that is, there exists G > 0, B > 0 such that
+                           v ≤ L, s ≤ B, for all v ∈ ∂ f 0 (z), s ∈ ∂ f b (z).                                       (19)
+Define μ := min(xi ,yi )∈V γi . To make the analysis easier, we assume that
+                                                            μ > L.                                                   (20)
+      The SGD update can be further expressed as:
+            z k+1 = z k − αk ĝk ,          ĝk = vk + sk + ξk , vk ∈ ∂ f 0 (z k ), sk ∈ ∂ f b (z k ),
+with Gaussian noise ξk ∼ N (0,                k ) satisfying
+
+                               E[ξk | Fk ] = 0,             E[ ξk 2 | Fk ] ≤ σ 2 a.s..
+And we assume the stepsize satisfies:
+                                                             ∞
+                                                                                 ∞
+                                                                                  
+                        αk > 0,         lim αk = 0,                αk = ∞,                 αk2 < ∞.                  (21)
+                                       k→∞
+                                                             k=0                  k=0
+
+   To prove the boundedness of the sequence generated by the algorithm, we need to use the
+following Robbins–Siegmund almost-supermartingale theorem.
+Lemma 1 (Robbins-Siegmund [30]) Let (X k ), (Ak ), (Bk ) and (Ck ) be sequences of nonneg-
+ative integrable random variables on some arbitrary probability space and adapted to the
+
+
+Algorithm 4 Legalization Algorithm
+1: for k from 1 to 10 do                                                                           
+2:    Calculate distance loss by e := max(v k ,v k )∈e xik − x kj  + max(v k ,v k )∈e  yik − y kj .
+                                                    i   j                          i   j
+3:      Update positions by gradient descent method.
+4:      for block I (position(xi , yi )) in V do
+5:         if block J (position(x j , y j )) overlaps I then
+6:            Get subgradient gi of x y for (xi , yi ) by automatic differentiation.
+7:            Calculate step by                ⎧
+                                               ⎪                      ∂x y
+                                               ⎪
+                                               ⎨ri j − |xi − x j | if ∂ x  = 0,
+                                        αi = ti j − |yi − y j | else if ∂x y  = 0,
+                                               ⎪
+                                               ⎪                            ∂y
+                                               ⎩0                  otherwise.
+
+8:           update position of (xi , yi ) by (xik+1 , yik+1 ) = (xi , yi ) − αi ∗ gi / gi .
+9:           break
+10:       end if
+11:     end for
+12:     Calculate boundary loss b (xi , yi ) and get subgradient gi of b (xi , yi ) by automatic differentiation.
+13:     Calculate step by
+                                            ⎧               w         ∂
+                                            ⎪xi − (W − 2i ) if ∂ xb > 0,
+                                            ⎪
+                                            ⎪
+                                            ⎪  wi                           ∂
+                                            ⎪
+                                            ⎪ 2 − xi              else if ∂ xb < 0,
+                                            ⎨
+                                                            hi              ∂
+                                     αi = yi − (H − 2 ) else if ∂ yb > 0,
+                                            ⎪
+                                            ⎪
+                                            ⎪  h
+                                            ⎪ 2 − yi
+                                                 i                          ∂
+                                                                  else if ∂ yb < 0,
+                                            ⎪
+                                            ⎪
+                                            ⎩
+                                               0                  otherwise.
+
+14:   update position of (xi , yi ) by (xik+1 , yik+1 ) = (xi , yi ) − αi ∗ gi .
+15: end for
+
+
+123
+ Journal of Global Optimization
+
+                          ∞                     ∞
+ filtration (Fk ), with     i=0 Ai < ∞ and          i=0 Ci < ∞ almost surely and
+
+                                  E[X k+1 | Fk ] ≤ (1 + Ak )X k − Bk + Ck
+                                                                                 ∞
+ almost surely for all k ∈ N. Then, almost surely, (X k ) converges and                i=0 Bi < ∞.
+
+ Theorem 3 For each block i, define the admissible ranges
+                  L x,i = w2i , Ux,i = W − w2i ,           L y,i = h2i , U y,i = H − h2i .
+ Set the n-dimensional box
+                                         
+                                         n
+                                    Q=     [L x,i , Ux,i ] × [L y,i , U y,i ].
+                                         i=1
+
+ Let p(z) denote the Euclidean projection onto the box Q, and d(z) represent the projection
+ distance, i.e.
+                  p(z) := arg min z − y 2 , d(z) = dist(z, Q) := z − p(z) 2 .
+                                  y∈Q
+
+ Let (Fk ) be the natural filtration generated by {η0 , g0 , η1 , g1 , . . . , ηk , gk }, i.e., all ran-
+ domness observed up to step k. Assume the mini-batch estimator is conditionally unbiased
+ (i.e. E[gk |Fk ] ∈ ∂ F(z k )). Then
+ (i) For every z and s ∈ ∂ f b (z), we have
+                                           z − p(z), s ≥ μ d(z).                                   (22)
+(ii) Let dk = d(z k ) and pk = p(z k ), where {z k } are the iterative variables generated by
+     Algorithm 3 with conditions (20), (21). Then
+                         2        
+                       E dk+1 | Fk ≤ dk2 − 2(μ − L) αk dk + αk2 C 2 ,                    (23)
+      for some finite constant C > 0.
+(iii) If μ ≥ L, then {z k } is almost surely bounded; more precisely, d(z k ) → 0 almost surely.
+
+ Proof (i) It suffices to prove the claim for each coordinate and then sum. Fix i and consider the
+ xi -coordinate; the yi -case is identical. Let px,i = min{max{xi , L x,i }, Ux,i } be the clipping of
+ xi to the interval [L x,i , Ux,i ]. From the definition
+                                                         of the one-dimensional penalty b,x,i (xi ) =
+ γi ReLU(L x,i − xi ) + ReLU(xi − Ux,i ) , we have
+                                                ⎧
+                                                ⎪
+                                                ⎪  {−γi },     xi < L x,i ,
+                                                ⎪
+                                                ⎪
+                                                ⎪
+                                                ⎪
+                                                ⎨[−γi , 0], xi = L x,i ,
+                                                ⎪
+                        sx,i ∈ ∂b,x,i (xi ) =     {0},          L x,i < xi < Ux,i ,
+                                                 ⎪
+                                                 ⎪
+                                                 ⎪
+                                                 ⎪ [0, γi ],     xi = Ux,i ,
+                                                 ⎪
+                                                 ⎪
+                                                 ⎪
+                                                 ⎩
+                                                   {γi },        xi > Ux,i .
+ We distinguish three cases.
+ 1) xi > Ux,i . Then px,i = Ux,i , xi − px,i > 0 and sx,i = γi . Hence (xi − px,i ) sx,i =
+    (xi − Ux,i )γi = γi |xi − px,i |.
+ 2) xi < L x,i . Then px,i = L x,i , xi − px,i < 0 and sx,i = −γi . Hence (xi − px,i ) sx,i =
+    (xi − L x,i )(−γi ) = γi |xi − px,i |.
+ 3) L x,i ≤ xi ≤ Ux,i . Then px,i = xi and (xi − px,i ) sx,i = 0 = γi |xi − px,i |.
+
+                                                                                              123
+                                                                        Journal of Global Optimization
+
+
+Therefore, for every coordinate,
+          (xi − px,i ) sx,i ≥ μ |xi − px,i |,      (yi − p y,i ) s y,i ≥ μ |yi − p y,i |.
+Summing over i = 1, . . . , n gives
+                  
+                  n
+                                                             
+                                                               n
+                                                                                               
+z − p(z), s =      (xi − px,i )sx,i + (yi − p y,i )s y,i ≥ μ     |xi − px,i | + |yi − p y,i |
+                  i=1                                             i=1
+              = μ z − p(z) 1 .
+Finally, u 1 ≥ u 2 for all u, hence
+                         z − p(z), s ≥ μ z − p(z) 2 = μ d(z),
+which is exactly (22).
+   (ii) From the properties of projection, we know
+        d(z k+1 ) = z k+1 − p(z k+1 ) ≤ z k+1 − p(z k ) = z k − αk ĝk − p(z k ) .
+Squaring and expanding the above inequality to get
+                          2
+                         dk+1 ≤ dk2 − 2αk z k − pk , ĝk  + αk2 ĝk 2 .
+Take conditional expectation and decompose ĝk = vk + sk + ξk :
+        E[dk+1
+           2
+               | Fk ] ≤ dk2 − 2αk z k − pk , vk + sk  + αk2 E[ vk + sk + ξk 2 | Fk ].
+By Cauchy-Schwarz inequality and equation (22), we have
+E[dk+1
+   2
+       | Fk ] ≤ dk2 − 2αk z k − pk , vk  − 2αk z k − pk , sk  + αk2 E[ vk + sk + ξk 2 | Fk ],
+               ≤ dk2 + 2αk dk vk − 2αk μdk + αk2 E[ vk + sk + ξk 2 | Fk ],
+               ≤ dk2 − 2(μ − L)αk dk + αk2 E[ vk + sk + ξk 2 | Fk ].
+
+Using (a + b + c)2 ≤ 3( a 2 + b 2 + c 2 ), vk ≤ L, sk ≤ B, and E[ ξk 2 | Fk ] ≤ σ 2
+gives E[ ĝk 2 | Fk ] ≤ C 2 , where C 2 = 3(L 2 + B 2 + σ 2 ). Hence
+                        2        
+                     E dk+1   | Fk ≤ dk2 − 2(μ − L) αk dk + αk2 C 2 .
+
+   (iii) Let X k = dk2 , Bk = 2(μ − L)αk dk , Ck = αk2 C 2 . Then
+                               E[X k+1 | Fk ] ≤ X k − Bk + Ck .
+      
+Since k αk2 < ∞, μ > L, the Robbins–Siegmund almost supermartingale                 theorem
+(Lemma 1) implies: (1) X k (i.e. dk2 ) converges a.s. to a finite value; (2) k Bk < ∞ almost
+surely. 
+   From k αk = ∞,   we know  that if dk → a > 0, then for sufficiently large k, dk ≥ a/2
+almost surely. Then k Bk ≥ k a(μ − L)αk = ∞ almost surely, which is a contradiction.
+Thus, we have dk → 0 almost surely.                                                        
+
+   Next, we prove that our algorithm converges to the Clarke-stationary set.
+Theorem 4 (Convergence to the Clarke-stationary set) Let {z k } be the optimization sequence
+generated by Algorithm 3 with conditions (20), (21). Define S = {z : 0 ∈ ∂ f (z)}, where
+∂ f (z) denotes the Clarke subdifferential. Then dist(z k , S) → 0 almost surely.
+
+
+123
+ Journal of Global Optimization
+
+
+ Proof We first prove the deterministic case, i.e. k = 0 in (18). We assume that all affine
+ regions are simplices; thus, they are convex. Otherwise, we can divide a nonsimplex region
+ into several simplex regions by adding hyper-edges. We split the remaining proof into several
+ steps.
+ (i) By the definition of our objective, S is bounded and closed. By Theorem 2, G S c has an
+     upper bound L g and a lower bound β. Moreover, for any z ∈   / S, there exists a unit vector
+     u z and β > 0 such that
+                                  v, u z  ≥ β    ∀ v ∈ ∂ f (z).                            (24)
+ (ii) Define the open halfspace Hβu := {w : w, u > β}. By the closeness of S, We can
+      show that for any z ∈     / S, there is a neighborhood Uz of z, a unit vector u z , such that
+      ∂ f (z  ) ⊂ Hβ z for all z  ∈ Uz , which means that while z k is inside Uz , each iteration step
+                      u
+
+       have a movement along −u z direction that is no less than β. Then, by the condition
+      will
+          αk → ∞, the optimization series will exit in finite steps from any given neighborhood
+      Uz of finite size. That means the deterministic subgradient descent method can’t converge
+      to a point z ∗ ∈ / S.
+(iii) By Theorem 3, the sequence generated by Algorithm 3 is a.s. bounded (for μ ≥ L).
+      Similarly, the deterministic optimization sequence is bounded. Therefore, there exists at
+      least one cluster point. If a cluster point z ∗ ∈ / S, then by (ii), we know that there exists
+      a neighborhood U (z ∗ ; δ) with δ < dist(z ∗ , S), and the sequence {z k }∞       k=1 must enter
+      U (z ∗ ; δ) infinitely many times. Next, we want to show that when k is large enough, i.e.,
+      maxk  >k αk is small enough, re-entering the neighborhood U (z ∗ ; δ) is not possible.
+    Since the sequence is bounded, we can cover the admissible region using a finite number
+ of small balls with a finite lower bound on the radius. We can take the radius of the balls
+ small enough such that all the affine pieces in a small ball have a non-empty common
+ intersection. We call the intersection “central structure”, denoted by Cs , of the small ball Us .
+ For simplicity, we can merge the balls that involve the same central structure into one set,
+ which is still denoted by Us . Next, we prove that starting from a given point z k near the center
+ of Us , for large enough k, f (z k ) − f (z k+M+1 ) ≥ δ > 0, where z k+M+1 is the first point in
+ the optimization sequence {z k , z k+1 , . . .} that is not inside Us . We discuss this by considering
+ different types of central structures. Denote by m(Us ) the number of affine pieces inside Us .
+  a) If m(Us ) = 1, then the central structure is a 2n-dimensional (full dimension) element;
+     i.e., this region Us is totally contained within one affine region. Then, as long as the
+     optimization point is inside Us , the objective function decays, except for the last point
+     that exits Us . Let δs := dist(z k , ∂Us ). Take k large enough, such that αk  < βδs /L g for all
+                                                                               
+     k  > k. Since αk → ∞, there exists a large enough M such that M−1             j=0 αk+ j β > δs .
+     Then we have
+                                  
+                                  M−1                              
+                                                                   M−1
+       f (z k )− f (z k+M+1 ) ≥         αk+ j |gs |2 −αk+M L g ≥         αk+ j β 2 −αk+M L g > 0. (25)
+                                  j=0                              j=0
+
+ b) If m(Us ) = 2, then the central structure Cs of Us is a 2n − 1 dimensional interface (face).
+    Without loss of generality, we assume that Cs is at the center of Us . A starting point
+    z k close to the center of Us is also close to Cs . For n ≥ 1, Cs is not a vertex. We can
+    take the unit vector u in the separating hyperplane argument parallel to Cs . This can be
+    done because all the gradients projected into the subspace defined by Cs are identical,
+    by the continuity of f . In fact, u can be taken as any normalizedvector that is positively
+    correlated to the gradient of f confined on Cs . Denote by giu := 2n−1                    ⊥
+                                                                        =1 gi , u  u  , gi :=
+
+
+                                                                                            123
+                                                                                Journal of Global Optimization
+
+
+   gi − giu , where {u  ,  = 1, . . . , 2n − 1} is a set of orthonormal basis of Cs with each axis
+   positively correlated to the gradient of f confined on Cs . We consider the optimization
+   sequence projected on the hyper-plane that is orthogonal to Cs . If g1⊥ , g2⊥  ≥ 0, then
+   the optimization sequence {z k+ j } will not pass through Cs more than once before exiting
+   Us . Since we assume the initial point z k is very close to Cs , we can expect that the pass-
+   through occurs at the first optimization step, if it exists. Correspondingly, if k is large
+   enough (similar to the m(Us ) = 1 case), the objective function will have a sufficient
+   decay before exiting Us as
+                                                        
+                                                        M−1
+                       f (z k ) − f (z k+M+1 ) ≥               αk+ j β 2 − αk+M L g > 0.
+                                                         j=1
+
+   If g1⊥ , g2⊥  < 0, then for sufficiently large k, the optimization sequence {z k+ j } will
+   either not pass through Cs or pass through Cs many times before exiting Us . That
+   is the reason why we call Cs a central structure. In the first case, the objective func-
+   tion decreases at every time step, then the situation is similar to the case m(Us ) = 1.
+   In the second case, each time the sequence passes through Cs , the objective function
+   will experience a jump but then decrease towards Cs . Consider the objective values at
+                  ∗
+   z k , z k∗ , z k+M                                    ∗
+                      , z k+M , z k+M+1 , where z k∗ , z k+M denotes the first and last intersection points
+   of the optimization sequence with Cs , respectively. We have
+                                                                              
+                                                                              M−1
+                      f (z k ) − f (z k∗ ) ≥ 0,                      ∗
+                                                    f (z k∗ ) − f (z k+M )≥         αk+ j β,
+                                                                              j=1
+
+   and
+              ∗
+         f (z k+M ) − f (z k+M ) ≥ −αk+M  L g ,           f (z k+M ) − f (z k+M+1 ) ≥ −αk+M L g ,
+   where M  is a number between 0 and M. So, by taking k large enough, we have
+                                              
+                                              M−1
+                 f (z k ) − f (z k+M+1 ) ≥              αk+ j β − (αk+M + αk+M  )L g > 0.
+                                                  j=1
+
+c) Now, we consider the case m(Us ) > 2 and dim(Cs ) = 0, i.e., Cs is a vertex. Since
+   Us ∩ S = ∅, by our choice of Us and the separating hyperplane argument, there exists a
+   unit vector u s such that
+                                v, u s  ≥ β > 0, ∀v ∈ ∂ f (z), z ∈ Us .                               (26)
+   That means when z k is close to Cs , the optimization point will move a certain distance
+   along the u s direction. In other words, the optimization sequence {z k+ j } will pass through
+   the hyperplane that is centered at Cs and orthogonal to u s at most once. After passing-
+   through, the sequence {z k+ j } will remain inside one affine region or linger around another
+   central structure Cs  with dim > 0 and linked to Cs . For the case n = 1, this leads to the
+   situations already considered in a) and b), by which arguments we can take large enough
+   k to make the objective function have sufficient decay during the entire optimization
+   procedure inside Us and Us  . For the case n > 1, we provide an analysis of lingering
+   around another central structure Cs  , with dim > 0 next.
+d) Now, we consider the case m(Us ) > 2 and d := dim(Cs ) > 0. In this case, as done in
+   b), the u vector in the separating hyperplane argument can be taken as any normalized
+   vector that is positively correlated with the gradient of f confined to Cs . Denote by
+
+123
+Journal of Global Optimization
+
+             
+    giu := d=1 gi , u  u  , gi⊥ := gi − giu , where {u  ,  = 1, . . . , d} is a set of orthonormal
+    bases of Cs , each axis is positively correlated with the gradient of f confined to Cs . We
+    consider the optimization sequence projected onto the hyperplane that is orthogonal to
+    Cs . If there exists a unit vector u ⊥               ⊥
+                                          s ⊥ u s and βs > 0 such that
+
+                           v, u ⊥      ⊥                 ⊥
+                                 s  ≥ βs , ∀v ∈ cl conv{gi , i = 1, . . . , d},
+
+    then the optimization sequence {z k+ j } will not pass through the hyperplane (u ⊥        s ) z =c
+                                                                                                 t
+
+    (which contains Cs ) more than once, which means the optimization sequence will move
+    into another neighborhood Us  containing a central structure Cs  with a co-dimension
+    smaller than Cs ’s. Now, consider the case where the optimization sequence lingers about
+    Cs for many iterations, for which there must be 0 ∈ cl conv{gi⊥ , i = 1, . . . , d}. We only
+    need to consider the case that dist(z k+ j , Cs ) < c max j τk+ j L g /β =: δk , where c is a
+    constant related to the minimum angle among the faces that are connected to Cs , because
+    in this case, after a jump in the objective function, there will be a large enough affine
+    region to let the objective function decay the jumped value. Now, consider the objective
+    values at z k , z ku , z k+M
+                             u   , z k+M , z k+M+1 , where z ku and z k+M
+                                                                      u   are the projections of z k and
+    z k+M onto Cs . We have
+
+                                              
+                                              M−1
+                    f (z ku ) − f (z k+M
+                                     u
+                                         )≥         αk+ j β 2 , | f (z k ) − f (z ku )| ≤ δk L g ,
+                                              j=0
+
+    and
+
+             | f (z k+M
+                    u
+                        ) − f (z k+M )| ≤ δk L g , | f (z k+M ) − f (z k+M+1 )| ≤ αk+M L g .
+
+    So, by taking k large enough, we have
+
+                                                 
+                                                 M−1
+                     f (z k ) − f (z k+M+1 ) ≥            αk+ j β − (2δk + αk+M )L g > 0.
+                                                    j=0
+
+   Since we can cover the entire admissible domain by a finite number of central structure
+neighborhoods Us , s = 1, . . . , n s . By the above argument, starting from a point z k near
+the center of any given Us , with k sufficiently large, the objective value at the first point of
+exiting Us decreases. Then, for a cluster point z ∗ ∈ / S, once z k exits U (z ∗ ; δ), the optimization
+sequence {z k+ j } with k sufficiently large will not re-enter the neighborhood of z ∗ since any
+path returning to the neighborhood of U (z ∗ ; δ  ), δ  < δ will pass through a certain number
+of central structure neighborhoods Us , s = 1, . . . , n s,z . After that, the objective function
+value will be smaller than the minimum function value on U (z ∗ ; δ  ). Thus, it can’t re-enter
+U (z ∗ ; δ  ). We proved that dist(z k , S) → 0, as k → ∞ for the deterministic case.
+   For the stochastic case, by taking the expectation of both sides of (18), we obtain
+
+                                   E(z k+1 | Fk ) = z k − αk g(z k ).                                 (27)
+
+At each step, the mean of z k follows the same dynamics as in the deterministic case. Thus,
+dist(E(z k ), S) → 0, as k → ∞. Next, we estimate the variance of the iteration
+
+    Var(z k+1 ) = Var(z k − αk gk ) + αk2 Var(ξk )
+                                                                                                    (28)
+                 = Var(z k ) + αk2 Var(gk ) − 2αk E (z k − Ez k )(gk − Egk ) + αk2 Var(ξk ).
+
+                                                                                                     123
+                                                                                  Journal of Global Optimization
+
+
+When k is large enough such that Ezk is very close to S, we have z k − Ez k and gk − Egk
+that are nonnegatively related, i.e., E (z k − Ez k )(gk − Egk ) ≥ 0. Therefore
+
+                         Var(z k+1 ) ≤ Var(z k ) + αk2 L 2g + αk2 Var(ξk ),                               (29)
+for sufficiently large k. Summing up the above equation for k = j, j + 1, . . . , j + m, we get
+                                                 
+                                                 j+m                  
+                                                                      j+m
+                   Var(z j+m+1 ) ≤ Var(z j ) +          α 2j L 2g +          α 2j Var(ξ j ).              (30)
+                                                 k= j                 k= j
+
+Note that when calculating the above inequality with          the given filtration F j , we have
+Var(z j |F j ) = 0. Then, due to the fact that Var(ξ j ) and ∞    j=1 α j are bounded, we obtain
+                                                                       2
+
+that limk→∞ maxk  >k Var(z k  |Fk ) = 0, i.e. dist(z k , S) → 0 almost surely. The theorem is
+proved.                                                                                         
+
+
+5 Numerical experiments
+
+5.1 Experimental setup
+
+In this section, we present a series of numerical experiments to assess the performance of
+three different methods: gradient descent (GD) [31], Adam [32], and RBSM. The evaluation is
+conducted using the GSRC benchmarks, which are widely used to test and evaluate electronic
+design automation tools and algorithms. The code is written in Python and run on a standard
+PC with an i9-13980HX microprocessor and 32GB of memory.
+
+5.2 Results on GSRC benchmark
+
+We implemented the RBSM method, GD method, and Adam method in Python. The GD
+method only uses the built-in SGD subroutine of Torch for optimization, while the Adam
+method is combined with a series of proposed enhanced techniques, including parameter
+updates, mean-field force, and weighted sampling. This is to compare the optimization algo-
+rithm and enhanced techniques from two perspectives. In the RBSM and Adam methods,
+the parameters are set to identical values: average field force coefficient α = 5, batch size
+is 1/5 of the total number of nets, and the initial value of parameter γ is 1000. In the GD
+method, γ is always set to a constant of 1000. We verify the feasibility and performance
+of the proposed algorithm by GSRC plane planning benchmarks. The final GSRC graphic
+design results were used as a test. We compared the wirelength and overlap of the different
+methods, as well as the visual effects of the placement(see Appendix). Table 1 shows the
+experimental data of GSRC and the results of different algorithms, while Table 2 presents
+the placement and legalization results of different algorithms in the benchmark test.
+    Through the experimental results, we can observe the following points:
+1. The proposed placement algorithm effectively reduces overlap while significantly mini-
+   mizing wirelength. This dual improvement demonstrates the method’s strong potential, as
+   conventional placement algorithms often struggle to simultaneously achieve these objec-
+   tives during the global placement phase. Consequently, our approach facilitates more
+   efficient legalization and detailed placement in subsequent stages.
+2. Compared to the GD algorithm without any enhanced techniques, the RBSM algorithm
+   achieves a substantial reduction in wirelength. Notably, the wirelength after the legaliza-
+
+123
+Journal of Global Optimization
+
+
+Table 1 GSRC benchmark circuit standards
+circuit       module             terminal   net    pin         W×H             Die-Area(mm2 )
+
+n10           10                 69         118    248         800 × 800       640000
+n30           30                 212        349    743         800 × 800       640000
+n50           50                 209        485    1050        800 × 800       640000
+n100          100                334        885    1873        800 × 800       640000
+n200          200                564        1585   3599        800 × 800       640000
+n300          300                569        1893   4358        800 × 800       640000
+
+
+
+
+    tion phase remains significantly shorter than that of the GD-based approach, underscoring
+    the critical role of the enhancement techniques integrated into the RBSM algorithm.
+ 3. When the SGD optimizer in the RBSM algorithm is replaced with the Adam optimizer, the
+    algorithm’s performance deteriorates significantly, even falling below the performance
+    of the GD method without enhancements. This indicates that gradient descent is more
+    suitable for solving the rectified linear penalty model of placement problems due to its
+    stability and convergence properties in this context.
+ 4. The proposed legalization algorithm not only eliminates overlap but also preserves the
+    wirelength advantages achieved during placement. In some cases, it further reduces the
+    wirelength. This result highlights the ability of the RBSM algorithm to maintain and even
+    enhance placement quality, demonstrating its superiority in achieving short wirelength
+    while ensuring overlap removal.
+
+5.3 Analysis of our enhanced technique
+
+In order to further illustrate the processing effectiveness of our optimization algorithm, we
+conducted a series of comparative experiments to assess the impact of four key enhancement
+techniques: degree-weighted sampling, adaptive parameter updating, mean-field force, and
+random disturbance on the algorithm, respectively. For details, see Table 3. The results pre-
+sented are the average outcomes from five independent runs of each algorithm. For clarity,
+each comparison isolates the effect of a single enhancement by modifying only the corre-
+sponding component of the algorithm, allowing for a precise evaluation of its contribution.
+
+
+1) Degree-Weighted Sampling: We compared random sampling with degree-weighted sam-
+   pling. The experimental results for the n100, n200, and n300 circuits, under the same
+   number of iteration steps, demonstrate that the overlap for random sampling is one to
+   two times higher than that for degree-weighted sampling. This finding highlights that
+   degree-weighted sampling enhances convergence performance by allocating more com-
+   putational resources to critical nets, thereby accelerating the optimization process.
+2) Adaptive Parameter Adjustment: The experimental results reveal that adaptive parameter
+   updating significantly reduces wirelength compared to fixed-parameter algorithms. As
+   the problem size increases, the performance gap becomes more pronounced. For instance,
+   in the n100 circuit, the adaptive parameter adjustment reduces wirelength by 10%, and in
+   the n300 circuit, it achieves a reduction of 20%. This demonstrates that adaptive parameter
+   selection provides stronger adaptability and optimization capability for circuit placement,
+   enabling significant reductions in wirelength and overlap. However, it is important to note
+
+                                                                                   123
+123
+      Table 2 The experimental results of RBSM, GD, and Adam methods in different circuits of the GSRC benchmark. Where LHPWL means the wirelength after legalization,
+      percentage means the overlap percentage relative to the total cell area. In the RBSM and Adam methods, the average field force coefficient α = 5, the batch size is 1/5 of the
+      total number of nets, and the initial value of parameter γ is 1000. In the GD method, γ is set to a constant of 1000.
+      Circuits                GSRC                                                          RBSM
+                              HPWL                     overlap(percentage)                  HPWL                    overlap(%)                    time(s)                 LHPWL
+
+      n10                     64299                    0                                    56902                   7206(3.25%)                   7.48                    56894
+      n30                     179811                   0                                    156761                  1896(0.91%)                   6.89                    157261
+      n50                     234281                   0                                    199356                  602(0.30%)                    3.30                    199236
+      n100                    395719                   0                                    328705                  1470(0.84%)                   5.78                    328991
+      n200                    738707                   0                                    571720                  2450(1.39%)                   17.76                   574778
+      n300                    937608                   0                                    694527                  3634(1.33%)                   36.12                   698867.6
+
+      Circuits           GD                                                                               Adam
+                         HPWL               overlap(%)             time(s)            LHPWL               HPWL               overlap(%)                   time(s)          LHPWL
+
+      n10                63959              82(0.037%)             0.45               63955               59631              29460(13.29%)                8.83             62240
+      n30                188770             612(0.29%)             0.40               188192              173825             35613(17.07%)                9.64             185765
+      n50                224062             1(0.0005%)             0.63               224038              217210             42382(21.35%)                5.69             230797
+      n100               366449             1(0.0006%)             0.92               366344              376827             20581(11.70%)                8.31             389947
+      n200               728562             0(0%)                  2.16               728475              697857             19104(10.87%)                20.18            720499
+      n300               978937             60(0.022%)             3.76               978438              797910             71746(26.26%)                47.87            914895
+                                                                                                                                                                                       Journal of Global Optimization
+Journal of Global Optimization
+
+
+Table 3 Comparative experiments on different enhancement techniques of RBSM method, with Original
+algorithm representing the results of RBSM method on corresponding circuits; Random batch represents the
+result of replacing weighted sampling with random sampling in the RBSM method (with the same sampling
+size); Fix gamma represents the result of using a fixed constant γ = 10000 instead of adaptive γ ; No mean
+force means that mean-field force is not applied; No perturbation means the result without random perturbation
+Circuit            n100                           n200                           n300
+                   HPWL          overlap   time   HPWL       overlap    time     HPWL        overlap    time
+
+RBSM               328705        1470      5.78   571720     2450       17.66    694527      3634       36.12
+Random batch       308666        3500      9.67   553329     4014       17.81    687753      5288       37.97
+Fix gamma          368020        1691      2.52   642329     1349       6.34     871881      2229       16.18
+No mean force      332958        2099      5.75   622479     1629       14.99    767695      3317       31.99
+No perturbation    302856        3575      7.97   539778     7241       18.49    653182      10041      40.55
+
+
+
+   that the runtime of the adaptive parameter algorithm is approximately twice that of the
+   fixed-parameter algorithm, indicating potential areas for future optimization.
+3) mean-field force: As can be seen in the table, removing the mean-field force from the
+   algorithm results in a 1%, 8%, and 10% increase in wirelength for the n100, n200, and
+   n300 circuits, respectively, compared to our full algorithm. This shows that adding the
+   force of the aggregation effect can significantly improve the placement effect, and the
+   effect becomes increasingly significant with the increase of the problem scale.
+4) Random Disturbance: Under a fixed number of iterations, incorporating random dis-
+   turbances effectively reduces overlap. This is because random perturbations enable the
+   algorithm to escape local minima, thereby accelerating convergence and improving over-
+   all optimization efficiency. This mechanism allows the algorithm to better explore the
+   solution space, leading to improved placement quality.
+
+   These experimental results collectively demonstrate the importance and effectiveness of
+the proposed enhancements in improving the performance of the placement algorithm. Each
+component contributes uniquely to addressing specific challenges in circuit placement.
+
+5.4 Results on ISPD2005 benchmark
+
+To further evaluate the scalability and effectiveness of our proposed method, we conduct
+experiments on large-scale ISPD2005 benchmark circuits and directly compare the results of
+our RBSM algorithm with DREAMPlace, a state-of-the-art GPU-accelerated global place-
+ment tool.
+    Table 4 presents the ISPD2005 benchmark details, and Table 5 presents a detailed compar-
+ison between DREAMPlace and RBSM across four large benchmarks. Note that all results
+are reported before legalization, i.e., they correspond to the global placement stage only.
+    From Table 5, we observe that the proposed RBSM algorithm achieves wirelength (HPWL)
+results comparable to DREAMPlace, while obtaining significantly smaller overlap (within
+12%). This demonstrates that our method is effective in directly reducing both wirelength
+and overlap, which are the primary objectives in global placement.
+    Although the density overflow and runtime of RBSM are relatively large, this outcome
+is expected because density optimization has not been explicitly incorporated into the algo-
+rithm design, and the current implementation has not been fully optimized for efficiency.
+Under these settings, such results are acceptable and reasonable. At the same time, RBSM
+
+                                                                                                 123
+123
+      Table 4 Statistics of ISPD2005 benchmarks
+      Circuit           Total Objects         Mov. Objects   Fixed Objects   Nets     Total Pins   Pins.Mov. Objs   Pins.Fixed. Objs
+
+      adaptec1          211447                210904         543             221142   944053       923513           20540
+      adaptec2          255023                254457         566             266009   1069482      1045699          23783
+      adaptec3          451650                450927         723             466758   1875039      1843852          31187
+      adaptec4          496045                494716         1329            515951   1912420      1876563          35857
+                                                                                                                                       Journal of Global Optimization
+Journal of Global Optimization
+
+
+Table 5 Comparison between DREAMPlace and our RBSM algorithm on ISPD2005 benchmarks. In this
+table, column overflow refers to the density overflow percentage relative to the placement region capacity,
+whereas column overlap represents the overlap percentage relative to the total cell area
+Circuit       DREAMPlace                                RBSM
+              HPWL               overflow    epoch      HPWL             overflow      epoch       overlap
+
+adaptec1      7.03 × 107         6.92%       607        5.05 × 107       26.8%         85          10.36%
+adaptec2      7.93 × 107         6.89%       637        8.06 × 107       16.9%         100         11.67%
+adaptec3      1.86 × 108         6.92%       679        1.92 × 108       12.9%         320         4.74%
+adaptec4      1.69 × 108         6.79%       697        1.79 × 108       14.0%         220         3.25%
+
+
+
+
+already demonstrates strong competitiveness in the key placement objectives of wirelength
+reduction. Furthermore, since the number of epochs required by RBSM is actually smaller
+than that of DREAMPlace, we believe that with GPU parallelization and density optimiza-
+tion incorporated, RBSM has the potential to achieve runtime and overall placement quality
+comparable to or even better than DREAMPlace.
+
+
+6 Conclusion
+
+In this paper, we take a new perspective to solve the placement problem and transform it
+into a neural net training problem. A nonsmooth optimization model for VLSI global place-
+ment is proposed, with half-perimeter wirelength minimization and cell overlap elimination
+as the primary objectives and constraints. A penalty function model is established as a loss
+function, which can be formulated as a deep neural network with only ReLU layers, with-
+out gradient vanishing and exploding issues. A stochastic subgradient method with operator
+splitting is proposed to solve the unconstrained nonsmooth optimization problem, and sev-
+eral optimization acceleration techniques are adopted to accelerate convergence. In addition,
+we provide a theoretical convergence analysis of the proposed algorithm, which guarantees
+its reliability for large-scale optimization. Numerical experiments on medium-scale GSRC
+benchmarks demonstrate that our model can effectively reduce HPWL and cell overlap,
+and the high-quality solutions obtained provide references for other imprecise algorithms.
+Moreover, large-scale experiments on ISPD2005 benchmarks show that our method achieves
+wirelength performance comparable to state-of-the-art tools with acceptable overlap. How-
+ever, the current implementation is slower due to the lack of GPU acceleration and explicit
+density optimization. Improving efficiency and scalability will be the focus of future research.
+
+
+Appendix A Visual placement eﬀect display
+
+Here we present some figures to display visual placement effects. Figures 3, 4, 5, 6, 7 and 8
+show the comparisons of placement effects. Fig. 9 shows the legalization results.
+
+                                                                                               123
+                                                                  Journal of Global Optimization
+
+
+
+
+Fig. 3 Placement comparison for n = 10 using different methods
+
+
+
+
+Fig. 4 Placement comparison for n = 30 using different methods
+
+
+
+
+Fig. 5 Placement comparison for n = 50 using different methods
+
+
+
+
+Fig. 6 Placement comparison for n = 100 using different methods
+
+
+
+
+123
+Journal of Global Optimization
+
+
+
+
+Fig. 7 Placement comparison for n = 200 using different methods
+
+
+
+
+Fig. 8 Placement comparison for n = 300 using different methods.
+
+
+
+
+Fig. 9 Comparison between the results of RBSM method and the regularization results
+
+
+
+
+                                                                                      123
+                                                                                 Journal of Global Optimization
+
+
+Appendix B Eﬀect of smaller placement regions
+
+To further evaluate the robustness of our approach, we conducted additional experiments
+by varying the placement region size (W , H ). In particular, we tested smaller region sizes
+beyond the default W , H = 800. The results for the n = 200 circuit are summarized in
+Fig. 10–Fig. 11.
+    We observe that within a reasonable range—specifically, when the placement area (W ×H )
+is at least about 1.8 times larger than the total block area—our algorithm consistently achieves
+low wirelength (HPWL) and overlap. This indicates that the performance is largely insensitive
+to the exact choice of W , H under moderate scaling of the placement region.
+    However, when the placement region becomes too tight (e.g., W × H close to the total
+block area), the wirelength grows significantly, and overlap also increases, since the blocks
+nearly fill the entire region. This behavior is consistent with practical placement scenarios,
+where excessively small regions lead to infeasible or poor-quality layouts.
+
+
+
+
+Fig. 10 Results of RBSM under different W , H for the n=200 circuit
+
+
+
+
+Fig. 11 Results after legalization under different W , H for the n=200 circuit
+
+
+
+
+123
+Journal of Global Optimization
+
+
+Acknowledgements This work is partially supported by the National Key R&D Program of China (grant
+no. 2021YFA1003601), the National Natural Science Foundation of China (grant no. 92473208, 12494543,
+and 12171467), and the Strategic Priority Research Program of the Chinese Academy of Sciences (grant no.
+XDA0480504). The computations were partially performed on the LSSC4 PC cluster of State Key Laboratory
+of Scientific and Engineering Computing.
+
+Data Availability The authors confirm that the data supporting the findings of this study are available within
+the article [20] and its supplementary materials.
+
+
+Declarations
+Conflict of interest The authors have no conflicts of interest to declare that are relevant to the content of this
+article.
+
+
+References
+ 1. Alpert, C.J., Mehta, D.P., Sapatnekar, S.S.: Handbook of Algorithms for Physical Design Automation.
+    CRC Press, New York (2008). https://doi.org/10.1201/9781420013481
+ 2. Kahng, A.B., Lienig, J., Markov, I.L., Hu, J.: VLSI Physical Design: From Graph Partitioning to Timing
+    Closure. Springer, Heidelberg, Germany (2011). https://doi.org/10.1007/978-90-481-9591-6
+ 3. Sechen, C.: VLSI Placement and Global Routing Using Simulated Annealing, vol. 54. Springer, New
+    York, NY (2012)
+ 4. LaSalle, D., Karypis, G.: Multi-threaded graph partitioning. In: 2013 IEEE 27th International Symposium
+    on Parallel and Distributed Processing, pp. 225–236 (2013). https://doi.org/10.1109/IPDPS.2013.70 .
+    IEEE
+ 5. Viswanathan, N., Pan, M., Chu, C.: FastPlace 3.0: A fast multilevel quadratic placement algorithm with
+    placement congestion control. In: 2007 Asia and South Pacific Design Automation Conference, pp. 135–
+    140 (2007). https://doi.org/10.1109/ASPDAC.2007.357975 . IEEE
+ 6. Caldwell, A.E., Kahng, A.B., Markov, I.L.: Optimal partitioners and end-case placers for standard-cell
+    layout. In: Proceedings of the 1999 International Symposium on Physical Design, pp. 90–96 (1999).
+    https://doi.org/10.1109/43.892854
+ 7. Huang, Z., Li, X., Zhu, W.: Optimization models and algorithms for placement of very large scale inte-
+    grated circuits. Operations Research Transactions 25(03), 15–36 (2021). https://doi.org/10.15960/j.cnki.
+    issn.1007-6093.2021.03.002
+ 8. Chan, T., Cong, J., Sze, K.: Multilevel generalized force-directed method for circuit placement. In: Pro-
+    ceedings of the 2005 International Symposium on Physical Design, pp. 185–192 (2005). https://doi.org/
+    10.1109/IPDPS.2013.70
+ 9. Naylor, W.C., Donelly, R., Sha, L.: Non-linear optimization system and method for wire length and
+    delay optimization for an automatic electric circuit placer. Google Patents. US Patent 6,301,693 (2001).
+    US6301693
+10. Hsu, M., Chang, Y., Balabanov, V.: TSV-aware analytical placement for 3d IC designs. In: Proceedings
+    of the 48th ACM/IEEE Design Automation Conference (DAC), pp. 664–669 (2011). https://doi.org/10.
+    1145/2024724.2024852 . ACM
+11. Chen, T., Jiang, Z., Hsu, T., Chen, H., Chang, Y.: NTUplace3: An analytical placer for large-scale mixed-
+    size designs with preplaced blocks and density constraints. IEEE Trans. Comput. Aided Des. Integr.
+    Circuits Syst. 27(7), 1228–1240 (2008). https://doi.org/10.1109/TCAD.2008.923063
+12. Zhu, W., Chen, J., Peng, Z., Fan, G.: Nonsmooth optimization method for VLSI global placement. IEEE
+    Trans. Comput.-Aided Des. Integr. Circuits Syst. 34(4), 642–655 (2015) https://doi.org/10.1109/TCAD.
+    2015.2394484
+13. Sun, J., Cheng, H., Wu, J., Zhu, Z., Chen, Y.: Floorplanning of VLSI by mixed-variable optimization. In:
+    International Symposium on Intelligence Computation and Applications, pp. 137–151 (2023). Springer
+14. Gu, J., Jiang, Z., Lin, Y., Pan, D.Z.: DREAMPlace 3.0: Multi-electrostatics based robust VLSI placement
+    with region constraints. In: Proceedings of the 39th International Conference on Computer-Aided Design,
+    pp. 1–9 (2020)
+15. Liu, L., Fu, B., Lin, S., Liu, J., Young, E.F., Wong, M.D.: Xplace: An extremely fast and extensible
+    placement framework. IEEE Trans. Comput. Aided Des. Integr. Circuits Syst. 43(6), 1872–1885 (2023)
+16. Hou, Y., Ye, H., Yang, S., Zhang, Y., Xu, S., Song, G.: Transplace: Transferable circuit global placement
+    via graph neural network. arXiv preprint arXiv:2501.05667 (2025)
+
+
+                                                                                                    123
+                                                                                 Journal of Global Optimization
+
+
+17. Yao, X., Jiang, J., Zhao, Y., Liao, P., Lin, Y., Yu, B.: Evolution of optimization algorithms for global
+    placement via large language models. arXiv preprint arXiv:2504.17801 (2025)
+18. Sun, Y., Ye, F., Chen, Z., Wei, K., Cai, S.: Automatically discovering heuristics in a complex SAT solver
+    with large language models. arXiv preprint arXiv:2507.22876 (2025)
+19. Paszke, A., Gross, S., Massa, F., Lerer, A., Bradbury, J., Chanan, G., Killeen, T., Lin, Z., Gimelshein, N.,
+    Antiga, L., et al.: Pytorch: An imperative style, high-performance deep learning library. Adv. Neural Inf.
+    Process. Syst. 32 (2019) https://doi.org/10.48550/arXiv.1912.01703
+20. Salama, H.F., Reeves, D.S., Viniotis, Y.: GSRC floorplan benchmarks (1997)
+21. Chang, Y., Jiang, Z., Chen, T.C.: Essential issues in analytical placement algorithms. IPSJ Transactions
+    on System LSI Design Methodology 2, 145–166 (2009). https://doi.org/10.2197/ipsjtsldm.2.145
+22. Clarke, F.H.: Optimization and Nonsmooth Analysis. SIAM, Philadelphia, PA (1990)
+23. Boyd, S.P., Vandenberghe, L.: Convex Optimization. Cambridge University Press, New York (2004)
+24. Lin, Y., Dhar, S., Li, W., Ren, H., Khailany, B., Pan, D.Z.: DREAMplace: Deep learning toolkit-enabled
+    GPU acceleration for modern VLSI placement. In: Proceedings of the 56th Annual Design Automation
+    Conference 2019, pp. 1–6 (2019). https://doi.org/10.1109/TCAD.2020.3003843
+25. Jin, S., Li, L., Sun, Y.: On the random batch method for second order interacting particle systems.
+    Multiscale Model. Simul. 20(2), 741–768 (2022). https://doi.org/10.1137/20M1383069
+26. Lu, J., Chen, P., Chang, C., Sha, L., Huang, D.J., Teng, C., Cheng, C.: ePlace: Electrostatics based
+    placement using Nesterov’s method. In: Proceedings of the 51st Annual Design Automation Conference,
+    pp. 1–6 (2014). https://doi.org/10.1145/2593069.2593216
+27. Zhou, T., Ren, J., Medo, M., Zhang, Y.: Bipartite network projection and personal recommendation.
+    Phys. Rev. E: Stat., Nonlin, Soft Matter Phys. 76(4), 046115 (2007). https://doi.org/10.1103/PhysRevE.
+    76.046115
+28. Weiss, P.: L’hypothèse du champ moléculaire et la propriété ferromagnétique. J. Phys. Theor. Appl. 6(1),
+    661–690 (1907). https://doi.org/10.1051/jphystap:019070060066100
+29. Xiao, S., Wang, H., Wang, W., Huang, Z., Zhou, X., Xu, M.: Artificial bee colony algorithm based on
+    adaptive neighborhood search and Gaussian perturbation. Appl. Soft Comput. 100, 106955 (2021). https://
+    doi.org/10.1016/j.asoc.2020.106955
+30. Robbins, H., Siegmund, D.: A convergence theorem for non negative almost supermartingales and some
+    applications. In: Optimizing Methods in Statistics, pp. 233–257. Elsevier, New York (1971)
+31. Nocedal, J., Wright, S.J.: Numerical Optimization. Springer, New York, NY (1999). https://doi.org/10.
+    1007/978-0-387-40065-5
+32. Kingma, D.P., Ba, J.: Adam: a method for stochastic optimization. arXiv:1412.6980 [cs] (2014). Accessed
+    2018-04-24
+
+
+Publisher’s Note Springer Nature remains neutral with regard to jurisdictional claims in published maps and
+institutional affiliations.
+
+Springer Nature or its licensor (e.g. a society or other partner) holds exclusive rights to this article under
+a publishing agreement with the author(s) or other rightsholder(s); author self-archiving of the accepted
+manuscript version of this article is solely governed by the terms of such publishing agreement and applicable
+law.
+
+
+
+
+123
+
