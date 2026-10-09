@@ -28,8 +28,9 @@ struct Options {
 
 void usage() {
     std::cout
-        << "Usage: dreamplace_cpp.exe <raw-benchmark-base> [options]\n"
-        << "  Example: dreamplace_cpp.exe ../alg-electronic/ispd2005/adaptec1/adaptec1\n"
+        << "Usage: dreamplace_cpp.exe <benchmark-name-or-base-path> [options]\n"
+        << "  Example: dreamplace_cpp.exe adaptec1\n"
+        << "           (reads ./adaptec1/adaptec1.* from the project root)\n"
         << "Options:\n"
         << "  --iterations N       global-placement iterations (default 1000)\n"
         << "  --bins N             NxN electrostatic grid\n"
@@ -88,6 +89,15 @@ Options parse_options(int argc, char** argv) {
     options.benchmark = argv[1];
     if (fs::path(options.benchmark).extension() == ".aux") {
         options.benchmark = fs::path(options.benchmark).replace_extension().string();
+    }
+    const fs::path requested(options.benchmark);
+    if (!requested.has_parent_path()) {
+        const fs::path direct_base = fs::current_path() / requested;
+        const fs::path nested_base = direct_base / requested;
+        // Accept either <root>/<name>.* or the standard <root>/<name>/<name>.*.
+        options.benchmark = fs::exists(direct_base.string() + ".aux")
+            ? direct_base.string()
+            : nested_base.string();
     }
     const std::string name = fs::path(options.benchmark).filename().string();
     if (name == "adaptec2") options.gp.bins_x = options.gp.bins_y = 1024;
