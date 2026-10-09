@@ -19,9 +19,19 @@
 namespace dpcpp {
 namespace {
 
+struct DensityEvaluation {
+    DensityResult metrics;
+    std::vector<Real> node_gx;
+    std::vector<Real> node_gy;
+    std::vector<Real> filler_gx;
+    std::vector<Real> filler_gy;
+    bool have_gradient = false;
+};
+
 struct Evaluation {
     Metrics metrics;
     std::vector<Real> gradient;
+    DensityEvaluation density;
 };
 
 void save_smooth_global_snapshot(const Database& db,
@@ -39,49 +49,66 @@ void save_smooth_global_snapshot(const Database& db,
 std::vector<Real> capture(const Database& db, const std::vector<Filler>& fillers) {
     const std::size_t n = db.movable_ids.size() + fillers.size();
     std::vector<Real> result(2 * n);
-    std::size_t k = 0;
-    for (int id : db.movable_ids) result[k++] = db.nodes[id].x;
-    for (const Filler& filler : fillers) result[k++] = filler.x;
-    k = n;
-    for (int id : db.movable_ids) result[k++] = db.nodes[id].y;
-    for (const Filler& filler : fillers) result[k++] = filler.y;
+    const std::size_t movable = db.movable_ids.size();
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < static_cast<int>(movable); ++i) {
+        const Node& node = db.nodes[db.movable_ids[i]];
+        result[i] = node.x;
+        result[n + i] = node.y;
+    }
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < static_cast<int>(fillers.size()); ++i) {
+        result[movable + i] = fillers[i].x;
+        result[n + movable + i] = fillers[i].y;
+    }
     return result;
+}
+
+void capture_into(const Database& db, const std::vector<Filler>& fillers,
+                  std::vector<Real>& result) {
+    const std::size_t n = db.movable_ids.size() + fillers.size();
+    result.resize(2 * n);
+    const std::size_t movable = db.movable_ids.size();
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < static_cast<int>(movable); ++i) {
+        const Node& node = db.nodes[db.movable_ids[i]];
+        result[i] = node.x;
+        result[n + i] = node.y;
+    }
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < static_cast<int>(fillers.size()); ++i) {
+        result[movable + i] = fillers[i].x;
+        result[n + movable + i] = fillers[i].y;
+    }
 }
 
 void apply(Database& db, std::vector<Filler>& fillers, const std::vector<Real>& values) {
     const std::size_t n = db.movable_ids.size() + fillers.size();
     if (values.size() != 2 * n) throw std::runtime_error("position vector size mismatch");
-    std::size_t k = 0;
-    for (int id : db.movable_ids) db.nodes[id].x = values[k++];
-    for (Filler& filler : fillers) filler.x = values[k++];
-    k = n;
-    for (int id : db.movable_ids) db.nodes[id].y = values[k++];
-    for (Filler& filler : fillers) filler.y = values[k++];
-    clamp_to_region(db, fillers);
+    const std::size_t movable = db.movable_ids.size();
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < static_cast<int>(movable); ++i) {
+        Node& node = db.nodes[db.movable_ids[i]];
+        node.x = std::clamp(values[i], db.xl + 0.5 * node.width,
+                            db.xh - 0.5 * node.width);
+        node.y = std::clamp(values[n + i], db.yl + 0.5 * node.height,
+                            db.yh - 0.5 * node.height);
+    }
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < static_cast<int>(fillers.size()); ++i) {
+        Filler& filler = fillers[i];
+        filler.x = std::clamp(values[movable + i],
+                              db.xl + 0.5 * filler.width,
+                              db.xh - 0.5 * filler.width);
+        filler.y = std::clamp(values[n + movable + i],
+                              db.yl + 0.5 * filler.height,
+                              db.yh - 0.5 * filler.height);
+    }
 }
 
 Real l1_norm(const std::vector<Real>& x) {
     Real result = 0.0;
     for (Real value : x) result += std::abs(value);
-    return result;
-}
-
-Real l2_norm(const std::vector<Real>& x) {
-    Real result = 0.0;
-    for (Real value : x) result += value * value;
-    return std::sqrt(result);
-}
-
-Real dot(const std::vector<Real>& a, const std::vector<Real>& b) {
-    Real result = 0.0;
-    for (std::size_t i = 0; i < a.size(); ++i) result += a[i] * b[i];
-    return result;
-}
-
-std::vector<Real> difference(const std::vector<Real>& a,
-                             const std::vector<Real>& b) {
-    std::vector<Real> result(a.size());
-    for (std::size_t i = 0; i < a.size(); ++i) result[i] = a[i] - b[i];
     return result;
 }
 
@@ -93,22 +120,33 @@ Real gamma_from_overflow(const ElectricDensity& density,
     return base * std::pow(10.0, std::clamp(exponent, -3.0, 3.0));
 }
 
-Evaluation evaluate(Database& db, std::vector<Filler>& fillers,
-                    ElectricDensity& density, const GlobalPlaceConfig& config,
-                    Real lambda, Real gamma, bool need_gradient) {
-    std::vector<Real> density_gx, density_gy, filler_gx, filler_gy;
-    const DensityResult d = density.compute(
+void evaluate_density(Database& db, std::vector<Filler>& fillers,
+                      ElectricDensity& density, bool need_gradient,
+                      DensityEvaluation& result) {
+    result.have_gradient = need_gradient;
+    result.metrics = density.compute(
         db, fillers,
-        need_gradient ? &density_gx : nullptr,
-        need_gradient ? &density_gy : nullptr,
-        need_gradient ? &filler_gx : nullptr,
-        need_gradient ? &filler_gy : nullptr);
-    std::vector<Real> wire_gx, wire_gy;
+        need_gradient ? &result.node_gx : nullptr,
+        need_gradient ? &result.node_gy : nullptr,
+        need_gradient ? &result.filler_gx : nullptr,
+        need_gradient ? &result.filler_gy : nullptr);
+}
+
+void populate_evaluation(Database& db,
+                         const std::vector<Filler>& fillers,
+                         const GlobalPlaceConfig& config,
+                         Real lambda, Real gamma, bool need_gradient,
+                         Evaluation& result) {
+    if (need_gradient && !result.density.have_gradient)
+        throw std::runtime_error("cached density evaluation has no gradients");
+    const DensityResult& d = result.density.metrics;
+    static std::vector<Real> wire_gx;
+    static std::vector<Real> wire_gy;
     const Real smooth = weighted_average_wirelength(
         db, gamma, config.degree_limit,
         need_gradient ? &wire_gx : nullptr,
         need_gradient ? &wire_gy : nullptr);
-    Evaluation result;
+    result.metrics = Metrics{};
     result.metrics.exact_hpwl = exact_hpwl(db);
     result.metrics.smooth_wirelength = smooth;
     result.metrics.density_energy = d.energy;
@@ -116,36 +154,39 @@ Evaluation evaluate(Database& db, std::vector<Filler>& fillers,
     result.metrics.max_density = d.max_density;
     result.metrics.density_weight = lambda;
     result.metrics.gamma = gamma;
-    if (!need_gradient) return result;
+    if (!need_gradient) return;
 
     const std::size_t n = db.movable_ids.size() + fillers.size();
-    result.gradient.assign(2 * n, 0.0);
-    std::size_t k = 0;
-    for (int id : db.movable_ids) {
+    result.gradient.resize(2 * n);
+    const std::size_t movable = db.movable_ids.size();
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < static_cast<int>(movable); ++i) {
+        const int id = db.movable_ids[i];
         const Node& node = db.nodes[id];
         const Real preconditioner = std::max<Real>(
             1.0, db.node_pin_weight[id] + lambda * node.area());
-        result.gradient[k++] = (wire_gx[id] + lambda * density_gx[id]) /
-                               preconditioner;
+        result.gradient[i] =
+            (wire_gx[id] + lambda * result.density.node_gx[id]) / preconditioner;
+        result.gradient[n + i] =
+            (wire_gy[id] + lambda * result.density.node_gy[id]) / preconditioner;
     }
-    for (std::size_t i = 0; i < fillers.size(); ++i) {
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < static_cast<int>(fillers.size()); ++i) {
         const Real preconditioner = std::max<Real>(
             1.0, lambda * fillers[i].width * fillers[i].height);
-        result.gradient[k++] = lambda * filler_gx[i] / preconditioner;
+        result.gradient[movable + i] =
+            lambda * result.density.filler_gx[i] / preconditioner;
+        result.gradient[n + movable + i] =
+            lambda * result.density.filler_gy[i] / preconditioner;
     }
-    k = n;
-    for (int id : db.movable_ids) {
-        const Node& node = db.nodes[id];
-        const Real preconditioner = std::max<Real>(
-            1.0, db.node_pin_weight[id] + lambda * node.area());
-        result.gradient[k++] = (wire_gy[id] + lambda * density_gy[id]) /
-                               preconditioner;
-    }
-    for (std::size_t i = 0; i < fillers.size(); ++i) {
-        const Real preconditioner = std::max<Real>(
-            1.0, lambda * fillers[i].width * fillers[i].height);
-        result.gradient[k++] = lambda * filler_gy[i] / preconditioner;
-    }
+}
+
+Evaluation evaluate(Database& db, std::vector<Filler>& fillers,
+                    ElectricDensity& density, const GlobalPlaceConfig& config,
+                    Real lambda, Real gamma, bool need_gradient) {
+    Evaluation result;
+    evaluate_density(db, fillers, density, need_gradient, result.density);
+    populate_evaluation(db, fillers, config, lambda, gamma, need_gradient, result);
     return result;
 }
 
@@ -283,15 +324,23 @@ GlobalPlaceResult global_place(Database& db, std::vector<Filler>& fillers,
     ++result.objective_evaluations;
     apply(db, fillers, v);
 
-    const auto initial_s = difference(v, v_previous);
-    const auto initial_y = difference(current.gradient, previous_eval.gradient);
-    Real step = l2_norm(initial_s) /
-                std::max<Real>(l2_norm(initial_y), 1.0e-30);
+    Real initial_ss = 0.0;
+    Real initial_yy = 0.0;
+    for (std::size_t i = 0; i < v.size(); ++i) {
+        const Real s = v[i] - v_previous[i];
+        const Real y = current.gradient[i] - previous_eval.gradient[i];
+        initial_ss += s * s;
+        initial_yy += y * y;
+    }
+    Real step = std::sqrt(initial_ss) /
+                std::max<Real>(std::sqrt(initial_yy), 1.0e-30);
     Real acceleration = 1.0;
     Real previous_hpwl = current.metrics.exact_hpwl;
     std::vector<Real> best_feasible_position;
     std::vector<Real> best_overflow_position = v;
     Metrics best_overflow_metrics = current.metrics;
+    std::vector<Real> u_next(v.size());
+    std::vector<Real> v_next(v.size());
 
     for (int iteration = 0; iteration < config.iterations; ++iteration) {
         current.metrics.iteration = iteration;
@@ -334,17 +383,24 @@ GlobalPlaceResult global_place(Database& db, std::vector<Filler>& fillers,
         // iteration's gradient here mixes two different objectives and makes
         // the curvature estimate meaningless as density weight changes.
         apply(db, fillers, v_previous);
-        previous_eval = evaluate(db, fillers, density, config, lambda, gamma, true);
-        ++result.objective_evaluations;
+        if (iteration > 0) {
+            populate_evaluation(
+                db, fillers, config, lambda, gamma, true, previous_eval);
+            ++result.objective_evaluations;
+        }
         apply(db, fillers, v);
-        current = evaluate(db, fillers, density, config, lambda, gamma, true);
-        ++result.objective_evaluations;
-        const std::vector<Real> s = difference(v, v_previous);
-        const std::vector<Real> y = difference(current.gradient,
-                                               previous_eval.gradient);
-        const Real sy = dot(s, y);
-        const Real yy = dot(y, y);
-        const Real lip = l2_norm(s) / std::max<Real>(l2_norm(y), 1.0e-30);
+        Real ss = 0.0;
+        Real sy = 0.0;
+        Real yy = 0.0;
+        for (std::size_t i = 0; i < v.size(); ++i) {
+            const Real s = v[i] - v_previous[i];
+            const Real y = current.gradient[i] - previous_eval.gradient[i];
+            ss += s * s;
+            sy += s * y;
+            yy += y * y;
+        }
+        const Real lip = std::sqrt(ss) /
+                         std::max<Real>(std::sqrt(yy), 1.0e-30);
         const Real bb_short = sy / std::max<Real>(yy, 1.0e-30);
         if (std::isfinite(bb_short) && bb_short > 0.0) step = bb_short;
         else step = std::min(step, lip);
@@ -354,29 +410,29 @@ GlobalPlaceResult global_place(Database& db, std::vector<Filler>& fillers,
         const Real max_step = 100.0 * std::max(db.xh - db.xl, db.yh - db.yl);
         step = std::clamp(step, 1.0e-12, max_step);
 
-        std::vector<Real> u_next(v.size());
-        std::vector<Real> v_next(v.size());
-        for (std::size_t i = 0; i < v.size(); ++i) {
+        #pragma omp parallel for schedule(static)
+        for (int i = 0; i < static_cast<int>(v.size()); ++i) {
             u_next[i] = v[i] - step * current.gradient[i];
             v_next[i] = u_next[i] + momentum * (u_next[i] - u[i]);
         }
-        v_previous = v;
-        previous_eval = std::move(current);
-        u = std::move(u_next);
+        v_previous.swap(v);
+        std::swap(previous_eval, current);
+        u.swap(u_next);
         apply(db, fillers, v_next);
-        v = capture(db, fillers);
+        capture_into(db, fillers, v);
         acceleration = next_acceleration;
 
         lambda = update_density_weight(lambda,
             previous_eval.metrics.exact_hpwl - previous_hpwl,
             iteration, config.reference_hpwl_delta);
         previous_hpwl = previous_eval.metrics.exact_hpwl;
-        DensityResult d = density.compute(db, fillers, nullptr, nullptr, nullptr, nullptr);
-        gamma = gamma_from_overflow(density, config, d.overflow);
-        // The next loop only logs/checkpoints these metrics before step_bb
-        // reevaluates the reference point under the current objective.  Do
-        // not build a third, immediately-discarded gradient here.
-        current = evaluate(db, fillers, density, config, lambda, gamma, false);
+        const bool need_next_gradient = iteration + 1 < config.iterations;
+        evaluate_density(
+            db, fillers, density, need_next_gradient, current.density);
+        gamma = gamma_from_overflow(
+            density, config, current.density.metrics.overflow);
+        populate_evaluation(
+            db, fillers, config, lambda, gamma, need_next_gradient, current);
         ++result.objective_evaluations;
     }
 

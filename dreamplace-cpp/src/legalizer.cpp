@@ -46,17 +46,37 @@ Real snap_nearest(Real x, const Row& row) {
                             row.site_spacing;
 }
 
+std::vector<std::vector<int>> index_fixed_obstacles_by_row(const Database& db) {
+    std::vector<std::vector<int>> result(db.rows.size());
+    if (db.rows.empty()) return result;
+    Real maximum_row_height = 0.0;
+    for (const Row& row : db.rows)
+        maximum_row_height = std::max(maximum_row_height, row.height);
+    for (int id : db.fixed_ids) {
+        const Node& fixed = db.nodes[id];
+        if (fixed.terminal_ni) continue;
+        const Real bottom = fixed.y - 0.5 * fixed.height;
+        const Real top = fixed.y + 0.5 * fixed.height;
+        auto first = std::lower_bound(
+            db.rows.begin(), db.rows.end(), bottom - maximum_row_height,
+            [](const Row& row, Real y) { return row.y < y; });
+        for (auto it = first; it != db.rows.end() && it->y < top - 1.0e-9; ++it) {
+            if (it->y + it->height <= bottom + 1.0e-9) continue;
+            result[static_cast<std::size_t>(it - db.rows.begin())].push_back(id);
+        }
+    }
+    return result;
+}
+
 std::vector<Segment> build_segments(const Database& db) {
     std::vector<Segment> result;
+    const std::vector<std::vector<int>> obstacles_by_row =
+        index_fixed_obstacles_by_row(db);
     for (int r = 0; r < static_cast<int>(db.rows.size()); ++r) {
         const Row& row = db.rows[r];
         std::vector<Interval> blocked;
-        for (int id : db.fixed_ids) {
+        for (int id : obstacles_by_row[r]) {
             const Node& fixed = db.nodes[id];
-            if (fixed.terminal_ni) continue;
-            const Real bottom = fixed.y - 0.5 * fixed.height;
-            const Real top = fixed.y + 0.5 * fixed.height;
-            if (top <= row.y + 1.0e-9 || bottom >= row.y + row.height - 1.0e-9) continue;
             const Real lo = std::max(row.origin, fixed.x - 0.5 * fixed.width);
             const Real hi = std::min(row.xh(), fixed.x + 0.5 * fixed.width);
             if (hi > lo) blocked.push_back({lo, hi});
@@ -134,6 +154,96 @@ int nearest_row(const Database& db, Real target_bottom) {
     return std::max(0, index);
 }
 
+int covered_row_count(const Database& db, int base_row, const Node& node) {
+    if (base_row < 0 || base_row >= static_cast<int>(db.rows.size())) return 0;
+    const Real bottom = db.rows[base_row].y;
+    const Real top = bottom + node.height;
+    int count = 0;
+    Real cursor = bottom;
+    for (int r = base_row; r < static_cast<int>(db.rows.size()) &&
+         cursor < top - 1.0e-6; ++r) {
+        const Row& row = db.rows[r];
+        if (std::abs(row.y - cursor) > 1.0e-6) return 0;
+        cursor = row.y + row.height;
+        ++count;
+    }
+    return std::abs(cursor - top) <= 1.0e-6 ? count : 0;
+}
+
+bool fit_multiline_cell(const Database& db,
+                        const std::vector<std::vector<int>>& segments_by_row,
+                        const std::vector<Segment>& segments,
+                        int base_row, const Node& node, Real target_left,
+                        Real& placed_left,
+                        std::vector<std::pair<int, int>>& reservations) {
+    const int row_count = covered_row_count(db, base_row, node);
+    if (row_count <= 1) return false;
+    std::vector<Interval> common;
+    for (int s : segments_by_row[base_row])
+        common.insert(common.end(), segments[s].free.begin(), segments[s].free.end());
+    for (int offset = 1; offset < row_count && !common.empty(); ++offset) {
+        std::vector<Interval> next;
+        for (const Interval& a : common) {
+            for (int s : segments_by_row[base_row + offset]) {
+                for (const Interval& b : segments[s].free) {
+                    const Real lo = std::max(a.lo, b.lo);
+                    const Real hi = std::min(a.hi, b.hi);
+                    if (hi - lo + 1.0e-9 >= node.width) next.push_back({lo, hi});
+                }
+            }
+        }
+        common.swap(next);
+    }
+    const Row& base = db.rows[base_row];
+    Real best_cost = std::numeric_limits<Real>::infinity();
+    bool found = false;
+    for (const Interval& space : common) {
+        Real left = std::clamp(snap_nearest(target_left, base),
+                               space.lo, space.hi - node.width);
+        left = snap_up(left, base);
+        if (left + node.width > space.hi + 1.0e-9) left -= base.site_spacing;
+        if (left < space.lo - 1.0e-9 ||
+            left + node.width > space.hi + 1.0e-9) continue;
+        bool aligned = true;
+        for (int offset = 1; offset < row_count; ++offset) {
+            const Row& row = db.rows[base_row + offset];
+            const Real site = (left - row.origin) / row.site_spacing;
+            if (std::abs(site - std::round(site)) > 1.0e-6) {
+                aligned = false;
+                break;
+            }
+        }
+        if (!aligned) continue;
+        const Real cost = std::abs(left - target_left);
+        if (cost < best_cost) {
+            best_cost = cost;
+            placed_left = left;
+            found = true;
+        }
+    }
+    if (!found) return false;
+
+    reservations.clear();
+    for (int offset = 0; offset < row_count; ++offset) {
+        bool reserved = false;
+        for (int s : segments_by_row[base_row + offset]) {
+            for (int interval = 0;
+                 interval < static_cast<int>(segments[s].free.size()); ++interval) {
+                const Interval& space = segments[s].free[interval];
+                if (placed_left >= space.lo - 1.0e-9 &&
+                    placed_left + node.width <= space.hi + 1.0e-9) {
+                    reservations.emplace_back(s, interval);
+                    reserved = true;
+                    break;
+                }
+            }
+            if (reserved) break;
+        }
+        if (!reserved) return false;
+    }
+    return true;
+}
+
 std::vector<Segment> rebuild_segment_cells(const Database& db) {
     std::vector<Segment> segments = build_segments(db);
     std::vector<std::vector<int>> by_row(db.rows.size());
@@ -180,30 +290,36 @@ void restore_movable_coordinates(Database& db,
 
 void greedy_legalize(Database& db, const std::vector<Desired>& desired,
                      std::vector<Segment>& segments, int row_search_limit) {
-    std::vector<std::vector<int>> segments_by_row(db.rows.size());
-    for (int s = 0; s < static_cast<int>(segments.size()); ++s) {
-        segments_by_row[segments[s].row].push_back(s);
-    }
-    std::vector<int> order = db.movable_ids;
-    // Preserve the global placement's left-to-right order.  A global
-    // width-first order is robust against fragmentation, but destroys
-    // locality by letting a small set of wide cells consume every nearby
-    // row before the spatial sweep reaches ordinary cells.
-    std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
-        if (desired[a].x != desired[b].x) return desired[a].x < desired[b].x;
-        if (db.nodes[a].width != db.nodes[b].width)
-            return db.nodes[a].width > db.nodes[b].width;
-        return desired[a].y < desired[b].y;
-    });
+    const MovableCoordinates original = save_movable_coordinates(db);
 
-    int placed = 0;
-    for (int id : order) {
+    auto try_order = [&](std::vector<int> order) -> bool {
+        // Every retry starts from the same continuous GP point and a fresh
+        // obstacle-aware segment map.  This avoids carrying fragmentation
+        // created by a failed greedy ordering into the fallback ordering.
+        restore_movable_coordinates(db, original);
+        segments = build_segments(db);
+        std::vector<std::vector<int>> segments_by_row(db.rows.size());
+        for (int s = 0; s < static_cast<int>(segments.size()); ++s)
+            segments_by_row[segments[s].row].push_back(s);
+
+        std::stable_sort(order.begin(), order.end(), [&](int a, int b) {
+            const bool tall_a = db.nodes[a].height > db.rows.front().height + 1.0e-6;
+            const bool tall_b = db.nodes[b].height > db.rows.front().height + 1.0e-6;
+            if (tall_a != tall_b) return tall_a;
+            if (tall_a && db.nodes[a].width != db.nodes[b].width)
+                return db.nodes[a].width > db.nodes[b].width;
+            return false;
+        });
+
+        int placed = 0;
+        for (int id : order) {
         Node& node = db.nodes[id];
         const int base_row = nearest_row(db, desired[id].y - 0.5 * node.height);
         Real best_cost = std::numeric_limits<Real>::infinity();
         Real best_left = 0.0;
         int best_segment = -1;
         int best_interval = -1;
+        std::vector<std::pair<int, int>> best_reservations;
         const int maximum_radius = std::max(row_search_limit,
                                              static_cast<int>(db.rows.size()));
         for (int radius = 0; radius <= maximum_radius; ++radius) {
@@ -213,8 +329,26 @@ void greedy_legalize(Database& db, const std::vector<Desired>& desired,
                 const int r = base_row + direction * radius;
                 if (r < 0 || r >= static_cast<int>(db.rows.size())) continue;
                 const Row& row = db.rows[r];
-                if (node.height > row.height + 1.0e-6) continue;
                 tested = true;
+                if (node.height > row.height + 1.0e-6) {
+                    Real left = 0.0;
+                    std::vector<std::pair<int, int>> reservations;
+                    if (!fit_multiline_cell(
+                            db, segments_by_row, segments, r, node,
+                            desired[id].x - 0.5 * node.width,
+                            left, reservations)) continue;
+                    const Real cost = std::abs(
+                        left + 0.5 * node.width - desired[id].x) +
+                        2.0 * std::abs(row.y + 0.5 * node.height - desired[id].y);
+                    if (cost < best_cost) {
+                        best_cost = cost;
+                        best_left = left;
+                        best_segment = reservations.front().first;
+                        best_interval = reservations.front().second;
+                        best_reservations = std::move(reservations);
+                    }
+                    continue;
+                }
                 for (int s : segments_by_row[r]) {
                     Real left = 0.0;
                     int interval = -1;
@@ -228,6 +362,7 @@ void greedy_legalize(Database& db, const std::vector<Desired>& desired,
                         best_left = left;
                         best_segment = s;
                         best_interval = interval;
+                        best_reservations.clear();
                     }
                 }
             }
@@ -236,17 +371,55 @@ void greedy_legalize(Database& db, const std::vector<Desired>& desired,
             if (!tested && radius >= static_cast<int>(db.rows.size())) break;
         }
         if (best_segment < 0) {
-            throw std::runtime_error("greedy legalization cannot place node " + node.name);
+            return false;
         }
         Segment& segment = segments[best_segment];
         const Row& row = db.rows[segment.row];
         node.x = best_left + 0.5 * node.width;
         node.y = row.y + 0.5 * node.height;
-        occupy(segment, best_interval, best_left, best_left + node.width);
-        segment.cells.push_back(id);
+        if (best_reservations.empty()) {
+            occupy(segment, best_interval, best_left, best_left + node.width);
+            segment.cells.push_back(id);
+        } else {
+            // Occupy every covered row.  The tall cell itself is deliberately
+            // omitted from the one-row detailed-placement segment, so later
+            // reorder/Abacus passes keep this legal multi-row anchor fixed.
+            for (auto [s, interval] : best_reservations)
+                occupy(segments[s], interval, best_left, best_left + node.width);
+        }
         ++placed;
+        }
+        std::cout << "[Greedy] placed=" << placed << " segments=" << segments.size() << '\n';
+        return true;
+    };
+
+    std::vector<int> locality_order = db.movable_ids;
+    std::stable_sort(locality_order.begin(), locality_order.end(), [&](int a, int b) {
+        if (desired[a].x != desired[b].x) return desired[a].x < desired[b].x;
+        if (db.nodes[a].width != db.nodes[b].width)
+            return db.nodes[a].width > db.nodes[b].width;
+        return desired[a].y < desired[b].y;
+    });
+    if (try_order(locality_order)) return;
+
+    // Highly fragmented macro designs can exhaust the only intervals that
+    // fit a wide cell even though total capacity is sufficient.  Reordering
+    // by width first gives those cells first access to the larger intervals,
+    // while retaining x/y as deterministic tie breakers.
+    std::vector<int> width_order = db.movable_ids;
+    std::stable_sort(width_order.begin(), width_order.end(), [&](int a, int b) {
+        if (db.nodes[a].width != db.nodes[b].width)
+            return db.nodes[a].width > db.nodes[b].width;
+        if (desired[a].x != desired[b].x) return desired[a].x < desired[b].x;
+        return desired[a].y < desired[b].y;
+    });
+    if (try_order(width_order)) {
+        std::cout << "[GreedyFallback] width-first ordering accepted\n";
+        return;
     }
-    std::cout << "[Greedy] placed=" << placed << " segments=" << segments.size() << '\n';
+
+    restore_movable_coordinates(db, original);
+    throw std::runtime_error("greedy legalization cannot place all movable cells");
 }
 
 void abacus_segment(Database& db, Segment& segment,
@@ -748,12 +921,19 @@ std::size_t cell_insertion(Database& db, std::vector<Segment>& segments,
 }
 
 std::size_t projected_hpwl_refine(Database& db, std::vector<Segment>& segments,
-                                  int passes, Real initial_step_sites) {
+                                  int passes, Real initial_step_sites,
+                                  Real active_set_radius,
+                                  Real active_set_power) {
     std::size_t accepted = 0;
     Real step_sites = initial_step_sites;
     for (int pass = 0; pass < passes; ++pass) {
         std::vector<Real> gx, gy;
-        exact_hpwl_subgradient(db, 100, &gx, &gy);
+        if (active_set_radius > 0.0) {
+            exact_hpwl_active_set_direction(
+                db, 100, active_set_radius, active_set_power, &gx, &gy);
+        } else {
+            exact_hpwl_subgradient(db, 100, &gx, &gy);
+        }
         std::vector<Desired> desired(db.nodes.size());
         std::vector<std::pair<Real, Real>> original(db.nodes.size());
         for (int id : db.movable_ids) {
@@ -1103,6 +1283,8 @@ void compute_legalization_force(const Database& db, Real congestion_gain,
 LegalityResult check_legality(const Database& db, Real tolerance) {
     LegalityResult result;
     std::vector<std::vector<int>> by_row(db.rows.size());
+    const std::vector<std::vector<int>> obstacles_by_row =
+        index_fixed_obstacles_by_row(db);
     for (int id : db.movable_ids) {
         const Node& node = db.nodes[id];
         const Real left = node.x - 0.5 * node.width;
@@ -1110,9 +1292,14 @@ LegalityResult check_legality(const Database& db, Real tolerance) {
         const Real bottom = node.y - 0.5 * node.height;
         int row_index = nearest_row(db, bottom);
         const Row& row = db.rows[row_index];
-        bool boundary_ok = left >= row.origin - tolerance && right <= row.xh() + tolerance &&
-                           bottom >= row.y - tolerance &&
-                           bottom + node.height <= row.y + row.height + tolerance;
+        const int row_count = covered_row_count(db, row_index, node);
+        const Real top = bottom + node.height;
+        bool boundary_ok = row_count > 0 &&
+                           left >= row.origin - tolerance &&
+                           right <= row.xh() + tolerance &&
+                           std::abs(bottom - row.y) <= tolerance &&
+                           top <= db.rows[row_index + row_count - 1].y +
+                                      db.rows[row_index + row_count - 1].height + tolerance;
         if (!boundary_ok) {
             ++result.boundary_errors;
             if (result.first_error.empty()) result.first_error = "boundary: " + node.name;
@@ -1122,18 +1309,21 @@ LegalityResult check_legality(const Database& db, Real tolerance) {
             ++result.alignment_errors;
             if (result.first_error.empty()) result.first_error = "site alignment: " + node.name;
         }
-        by_row[row_index].push_back(id);
-        for (int fixed_id : db.fixed_ids) {
-            const Node& fixed = db.nodes[fixed_id];
-            if (fixed.terminal_ni) continue;
-            if (overlaps(left, right, fixed.x - 0.5 * fixed.width,
-                         fixed.x + 0.5 * fixed.width, tolerance) &&
-                overlaps(bottom, bottom + node.height, fixed.y - 0.5 * fixed.height,
-                         fixed.y + 0.5 * fixed.height, tolerance)) {
-                ++result.overlap_errors;
-                if (result.first_error.empty()) result.first_error =
-                    "fixed overlap: " + node.name + " / " + fixed.name;
-                break;
+        if (row_count > 0) {
+            for (int covered = row_index; covered < row_index + row_count; ++covered) {
+                by_row[covered].push_back(id);
+                for (int fixed_id : obstacles_by_row[covered]) {
+                    const Node& fixed = db.nodes[fixed_id];
+                    if (overlaps(left, right, fixed.x - 0.5 * fixed.width,
+                                 fixed.x + 0.5 * fixed.width, tolerance) &&
+                        overlaps(bottom, top, fixed.y - 0.5 * fixed.height,
+                                 fixed.y + 0.5 * fixed.height, tolerance)) {
+                        ++result.overlap_errors;
+                        if (result.first_error.empty()) result.first_error =
+                            "fixed overlap: " + node.name + " / " + fixed.name;
+                        break;
+                    }
+                }
             }
         }
     }
@@ -1167,7 +1357,7 @@ LegalizeResult legalize_and_refine(Database& db, const LegalizeConfig& config) {
     result.hpwl_after_greedy = exact_hpwl(db);
     save_legal_snapshot(db, config, "greedy");
     LegalityResult legal = check_legality(db);
-    if (!legal.legal) throw std::runtime_error("Greedy produced illegal placement: " + legal.first_error);
+        if (!legal.legal) throw std::runtime_error("Greedy produced illegal placement: " + legal.first_error);
 
     if (config.run_abacus) {
         for (Segment& segment : segments) abacus_segment(db, segment, desired);
@@ -1261,7 +1451,9 @@ LegalizeResult legalize_and_refine(Database& db, const LegalizeConfig& config) {
         if (config.projected_subgradient_passes > 0) {
             projected_hpwl_refine(db, segments,
                                   config.projected_subgradient_passes,
-                                  config.projected_step_sites);
+                                  config.projected_step_sites,
+                                  config.projected_active_set_radius,
+                                  config.projected_active_set_power);
         }
         if (config.constrained_bundle_passes > 0) {
             constrained_legal_bundle_refine(

@@ -8,6 +8,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <deque>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -37,39 +39,82 @@ struct BundleStats {
 
 std::vector<Real> capture(const Database& db, const std::vector<Filler>& fillers) {
     const std::size_t n = db.movable_ids.size() + fillers.size();
+    const std::size_t movable_count = db.movable_ids.size();
     std::vector<Real> values(2 * n);
-    std::size_t k = 0;
-    for (int id : db.movable_ids) values[k++] = db.nodes[id].x;
-    for (const Filler& filler : fillers) values[k++] = filler.x;
-    k = n;
-    for (int id : db.movable_ids) values[k++] = db.nodes[id].y;
-    for (const Filler& filler : fillers) values[k++] = filler.y;
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < static_cast<int>(n); ++i) {
+        if (static_cast<std::size_t>(i) < movable_count) {
+            const Node& node = db.nodes[db.movable_ids[i]];
+            values[i] = node.x;
+            values[n + i] = node.y;
+        } else {
+            const std::size_t filler_index = i - movable_count;
+            values[i] = fillers[filler_index].x;
+            values[n + i] = fillers[filler_index].y;
+        }
+    }
     return values;
+}
+
+void capture_into(const Database& db, const std::vector<Filler>& fillers,
+                  std::vector<Real>& values) {
+    const std::size_t n = db.movable_ids.size() + fillers.size();
+    const std::size_t movable_count = db.movable_ids.size();
+    values.resize(2 * n);
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < static_cast<int>(n); ++i) {
+        if (static_cast<std::size_t>(i) < movable_count) {
+            const Node& node = db.nodes[db.movable_ids[i]];
+            values[i] = node.x;
+            values[n + i] = node.y;
+        } else {
+            const std::size_t filler_index = i - movable_count;
+            values[i] = fillers[filler_index].x;
+            values[n + i] = fillers[filler_index].y;
+        }
+    }
 }
 
 void apply(Database& db, std::vector<Filler>& fillers,
            const std::vector<Real>& values) {
     const std::size_t n = db.movable_ids.size() + fillers.size();
+    const std::size_t movable_count = db.movable_ids.size();
     if (values.size() != 2 * n) throw std::runtime_error("position vector size mismatch");
-    std::size_t k = 0;
-    for (int id : db.movable_ids) db.nodes[id].x = values[k++];
-    for (Filler& filler : fillers) filler.x = values[k++];
-    k = n;
-    for (int id : db.movable_ids) db.nodes[id].y = values[k++];
-    for (Filler& filler : fillers) filler.y = values[k++];
-    clamp_to_region(db, fillers);
+    #pragma omp parallel for schedule(static)
+    for (int i = 0; i < static_cast<int>(n); ++i) {
+        if (static_cast<std::size_t>(i) < movable_count) {
+            Node& node = db.nodes[db.movable_ids[i]];
+            node.x = std::clamp(values[i], db.xl + 0.5 * node.width,
+                                db.xh - 0.5 * node.width);
+            node.y = std::clamp(values[n + i], db.yl + 0.5 * node.height,
+                                db.yh - 0.5 * node.height);
+        } else {
+            const std::size_t filler_index = i - movable_count;
+            Filler& filler = fillers[filler_index];
+            filler.x = std::clamp(values[i], db.xl + 0.5 * filler.width,
+                                  db.xh - 0.5 * filler.width);
+            filler.y = std::clamp(values[n + i], db.yl + 0.5 * filler.height,
+                                  db.yh - 0.5 * filler.height);
+        }
+    }
 }
 
 Real l1_norm(const std::vector<Real>& values) {
     Real sum = 0.0;
-    for (Real value : values) sum += std::abs(value);
+    #pragma omp parallel for reduction(+:sum) schedule(static)
+    for (int i = 0; i < static_cast<int>(values.size()); ++i)
+        sum += std::abs(values[i]);
     return sum;
 }
 
 Real rms_movable(const Database& db, const std::vector<Real>& gx,
                  const std::vector<Real>& gy) {
     Real sum = 0.0;
-    for (int id : db.movable_ids) sum += gx[id] * gx[id] + gy[id] * gy[id];
+    #pragma omp parallel for reduction(+:sum) schedule(static)
+    for (int i = 0; i < static_cast<int>(db.movable_ids.size()); ++i) {
+        const int id = db.movable_ids[i];
+        sum += gx[id] * gx[id] + gy[id] * gy[id];
+    }
     return std::sqrt(sum / std::max<std::size_t>(1, 2 * db.movable_ids.size()));
 }
 
@@ -408,8 +453,10 @@ Real update_lambda_control(Real eta, LambdaPolicy policy, int density_step,
 }
 
 Real coordinate_step(GlobalOptimizer optimizer, Real gradient, Real learning_rate,
-                     int age, const GlobalPlaceConfig& config, Real& first,
-                     Real& second, Real& maximum_second) {
+                     const GlobalPlaceConfig& config, Real& first,
+                     Real& second, Real& maximum_second,
+                     Real first_bias_denominator,
+                     Real second_bias_denominator) {
     if (optimizer == GlobalOptimizer::HeavyBall) {
         first = config.momentum * first + (1.0 - config.momentum) * gradient;
         return learning_rate * first;
@@ -423,8 +470,8 @@ Real coordinate_step(GlobalOptimizer optimizer, Real gradient, Real learning_rat
     }
     first = config.beta1 * first + (1.0 - config.beta1) * gradient;
     second = config.beta2 * second + (1.0 - config.beta2) * gradient * gradient;
-    const Real first_hat = first / std::max<Real>(1.0e-12, 1.0 - std::pow(config.beta1, age));
-    const Real second_hat = second / std::max<Real>(1.0e-12, 1.0 - std::pow(config.beta2, age));
+    const Real first_hat = first / first_bias_denominator;
+    const Real second_hat = second / second_bias_denominator;
     Real denominator = second_hat;
     if (optimizer == GlobalOptimizer::AMSGrad) {
         maximum_second = std::max(maximum_second, second_hat);
@@ -540,7 +587,8 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
                    "lambda_base,lambda_control,lambda_effective,learning_rate,"
                    "bundle_cuts,bundle_newest_weight,bundle_model_error,bundle_cosine,"
                    "refinement,optimizer,grid_x,grid_y,row_distance,segment_overflow,"
-                   "quick_legal_hpwl,serious_step";
+                   "quick_legal_hpwl,serious_step,active_radius_scale,active_radius,"
+                   "adaptive_signal,adaptive_phase";
         if (config.progressive_legalization) {
             metrics << ",stage,obstacle_energy,obstacle_weight,macro_overlap_area,"
                        "macro_overlap_ratio,macro_overlap_cells,"
@@ -552,6 +600,12 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
 
     const std::size_t n = db.movable_ids.size() + fillers.size();
     std::vector<Real> first(2 * n, 0.0), second(2 * n, 0.0), maximum_second(2 * n, 0.0);
+    std::vector<Real> dgx, dgy, fgx, fgy;
+    std::vector<Real> wgx, wgy;
+    std::vector<Real> gradient(2 * n, 0.0);
+    std::vector<Real> previous_positions(2 * n), positions(2 * n);
+    std::vector<Real> wire_gradient_refinement(2 * n, 0.0);
+    std::vector<Real> density_normal_refinement(2 * n, 0.0);
     std::vector<BundleCut> cuts;
     std::vector<std::vector<BundleCut>> grouped_cuts(
         config.bundle_groups > 1 ? config.bundle_groups : 0);
@@ -576,11 +630,19 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
     int refinement_start = -1;
     Real bundle_prox_multiplier = 1.0;
     Real serious_trial_scale = 1.0;
+    Real tangent_trial_scale = 1.0;
+    Real active_radius_scale = 1.0;
+    Real adaptive_signal_ema = 0.0;
+    int adaptive_phase = 0;
+    std::deque<Real> adaptive_hpwl_history;
+    std::deque<Real> adaptive_overflow_history;
     int last_serious_step = 1;
     Real obstacle_weight_base = 0.0;
     int previous_stage = 0;
     Real last_filter_fraction = 1.0;
     GlobalPlaceResult result;
+    double profile_density = 0.0, profile_wire = 0.0;
+    double profile_update = 0.0;
     std::vector<Real> best_feasible, best_overflow = capture(db, fillers);
     std::vector<Real> best_legal_raw;
     Metrics best_legal_metrics;
@@ -592,6 +654,7 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
     Real best_progressive_score = std::numeric_limits<Real>::infinity();
 
     for (int iteration = 0; iteration < config.iterations; ++iteration) {
+        const auto profile_iteration_start = std::chrono::steady_clock::now();
         const int obstacle_start = config.hpwl_only_iterations +
             config.progressive_density_iterations;
         const int stage = !config.progressive_legalization
@@ -611,8 +674,11 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
                       << " iter=" << iteration << '\n';
             previous_stage = stage;
         }
-        std::vector<Real> dgx, dgy, fgx, fgy;
+        dgx.clear(); dgy.clear(); fgx.clear(); fgy.clear();
+        const auto profile_density_start = std::chrono::steady_clock::now();
         DensityResult d = density->compute(db, fillers, &dgx, &dgy, &fgx, &fgy);
+        profile_density += std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - profile_density_start).count();
         std::vector<Real> obstacle_gx, obstacle_gy;
         const ObstacleResult obstacle = obstacle_field
             ? obstacle_field->compute(
@@ -660,11 +726,13 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
                           << grid_y << " overflow=" << d.overflow << '\n';
             }
         }
-        std::vector<Real> wgx, wgy;
+        wgx.clear(); wgy.clear();
         std::vector<Real> group_hpwl;
         std::vector<std::vector<Real>> group_gx, group_gy;
         Real hpwl = 0.0;
+        Real current_active_radius = 0.0;
         const bool grouped_bundle = config.enable_bundle && config.bundle_groups > 1;
+        const auto profile_wire_start = std::chrono::steady_clock::now();
         if (grouped_bundle) {
             hpwl = exact_hpwl_group_subgradients(
                 db, config.degree_limit, config.bundle_groups,
@@ -678,14 +746,49 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
                 }
             }
         } else {
-            hpwl = exact_hpwl_subgradient(db, config.degree_limit, &wgx, &wgy);
+            Real active_radius = config.active_set_radius;
+            if (refinement_active && config.refinement_active_set_radius >= 0.0) {
+                const Real blend = config.refinement_active_set_decay_iterations > 0
+                    ? std::clamp(
+                          (iteration - refinement_start) / static_cast<Real>(
+                              config.refinement_active_set_decay_iterations),
+                          0.0, 1.0)
+                    : 1.0;
+                active_radius = (1.0 - blend) * config.active_set_radius +
+                    blend * config.refinement_active_set_radius;
+            }
+            if (config.adaptive_active_set && active_radius > 0.0) {
+                active_radius *= active_radius_scale;
+            }
+            current_active_radius = active_radius;
+            hpwl = config.primal_dual_step > 0.0
+                ? exact_hpwl_primal_dual_direction(
+                      db, config.degree_limit, config.primal_dual_step,
+                      &wgx, &wgy)
+                : active_radius > 0.0
+                ? exact_hpwl_active_set_direction(
+                      db, config.degree_limit, active_radius,
+                      config.active_set_power,
+                      &wgx, &wgy,
+                      config.adaptive_active_predictive
+                          ? config.adaptive_active_set_span_cap : 0.0)
+                : exact_hpwl_subgradient(
+                      db, config.degree_limit, &wgx, &wgy);
         }
+        profile_wire += std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - profile_wire_start).count();
         ++result.objective_evaluations;
-        if (config.gradient_sampling_samples > 0 &&
+        const int active_sampling_count = refinement_active
+            ? config.refinement_gradient_sampling_samples
+            : config.gradient_sampling_samples;
+        const Real active_sampling_radius = refinement_active
+            ? config.refinement_gradient_sampling_radius
+            : config.gradient_sampling_radius;
+        if (active_sampling_count > 0 &&
             iteration % config.gradient_sampling_interval == 0) {
             sample_exact_subgradient(
-                db, config.gradient_sampling_samples,
-                config.gradient_sampling_radius,
+                db, active_sampling_count,
+                active_sampling_radius,
                 config.seed ^ static_cast<std::uint64_t>(iteration + 1),
                 config.degree_limit, wgx, wgy, result.objective_evaluations);
         }
@@ -714,12 +817,22 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
         const bool start_progressive_refinement =
             config.progressive_legalization && stage == 3 &&
             d.overflow <= config.progressive_overflow_upper;
+        const Real refinement_start_overflow =
+            config.refinement_start_overflow >= 0.0
+                ? config.refinement_start_overflow : config.stop_overflow;
         const bool start_legacy_refinement = config.feasible_refinement &&
-            !config.progressive_legalization && d.overflow <= config.stop_overflow;
+            !config.progressive_legalization &&
+            d.overflow <= refinement_start_overflow;
         if (density_active && !refinement_active &&
             (start_progressive_refinement || start_legacy_refinement)) {
             refinement_active = true;
             refinement_start = iteration;
+            if (config.adaptive_active_smart) {
+                active_radius_scale = 1.0;
+                adaptive_signal_ema = 0.0;
+                adaptive_hpwl_history.clear();
+                adaptive_overflow_history.clear();
+            }
             std::fill(first.begin(), first.end(), 0.0);
             std::fill(second.begin(), second.end(), 0.0);
             std::fill(maximum_second.begin(), maximum_second.end(), 0.0);
@@ -740,6 +853,8 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
         Real learning_rate = fraction * ((db.xh - db.xl) + (db.yh - db.yl)) /
                              std::sqrt(1.0 + 4.0 * progress);
         if (refinement_active) learning_rate *= config.refinement_learning_rate_scale;
+        if (refinement_active && config.tangent_refinement)
+            learning_rate *= tangent_trial_scale;
         const int transition_age = iteration - last_grid_transition;
         if (transition_age >= 0 && transition_age < 25) {
             learning_rate *= 0.10 + 0.90 * (transition_age + 1) / 25.0;
@@ -916,7 +1031,9 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
                     << density->bins_x() << ',' << density->bins_y() << ','
                     << legal_proxy.mean_row_distance << ','
                     << legal_proxy.segment_overflow << ','
-                    << quick_legal_hpwl << ',' << last_serious_step;
+                    << quick_legal_hpwl << ',' << last_serious_step << ','
+                    << active_radius_scale << ',' << current_active_radius << ','
+                    << adaptive_signal_ema << ',' << adaptive_phase;
             if (config.progressive_legalization) {
                 metrics << ',' << stage << ',' << obstacle.energy << ','
                         << obstacle_weight << ',' << obstacle.overlap_area << ','
@@ -943,47 +1060,105 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
             continue;
         }
 
-        std::vector<Real> gradient(2 * n, 0.0);
-        std::size_t k = 0;
-        for (int id : db.movable_ids) {
-            const Node& node = db.nodes[id];
-            const Real preconditioner = std::max<Real>(
-                1.0, db.node_pin_weight[id] + lambda * node.area());
-            gradient[k++] = (wgx[id] + lambda * dgx[id] +
-                             obstacle_weight * (stage == 3 ? obstacle_gx[id] : 0.0)) /
-                            preconditioner;
-        }
-        for (std::size_t i = 0; i < fillers.size(); ++i) {
-            const Real preconditioner = std::max<Real>(
-                1.0, lambda * fillers[i].width * fillers[i].height);
-            gradient[k++] = lambda * fgx[i] / preconditioner;
-        }
-        k = n;
-        for (int id : db.movable_ids) {
-            const Node& node = db.nodes[id];
-            const Real preconditioner = std::max<Real>(
-                1.0, db.node_pin_weight[id] + lambda * node.area());
-            gradient[k++] = (wgy[id] + lambda * dgy[id] +
-                             obstacle_weight * (stage == 3 ? obstacle_gy[id] : 0.0)) /
-                            preconditioner;
-        }
-        for (std::size_t i = 0; i < fillers.size(); ++i) {
-            const Real preconditioner = std::max<Real>(
-                1.0, lambda * fillers[i].width * fillers[i].height);
-            gradient[k++] = lambda * fgy[i] / preconditioner;
+        std::fill(gradient.begin(), gradient.end(), 0.0);
+        if (refinement_active && config.tangent_refinement) {
+            std::fill(wire_gradient_refinement.begin(),
+                      wire_gradient_refinement.end(), 0.0);
+            std::fill(density_normal_refinement.begin(),
+                      density_normal_refinement.end(), 0.0);
+            std::vector<Real>& wire_gradient = wire_gradient_refinement;
+            std::vector<Real>& density_normal = density_normal_refinement;
+            const int movable_count = static_cast<int>(db.movable_ids.size());
+            const int filler_count = static_cast<int>(fillers.size());
+            #pragma omp parallel for schedule(static)
+            for (int i = 0; i < movable_count; ++i) {
+                const int id = db.movable_ids[i];
+                const Node& node = db.nodes[id];
+                wire_gradient[i] = wgx[id] /
+                    std::max<Real>(1.0, db.node_pin_weight[id]);
+                density_normal[i] = dgx[id] /
+                    std::max<Real>(1.0, node.area());
+                wire_gradient[n + i] = wgy[id] /
+                    std::max<Real>(1.0, db.node_pin_weight[id]);
+                density_normal[n + i] = dgy[id] /
+                    std::max<Real>(1.0, node.area());
+            }
+            #pragma omp parallel for schedule(static)
+            for (int i = 0; i < filler_count; ++i) {
+                const std::size_t index = db.movable_ids.size() + i;
+                const Real area = std::max<Real>(1.0, fillers[i].width * fillers[i].height);
+                density_normal[index] = fgx[i] / area;
+                density_normal[n + index] = fgy[i] / area;
+            }
+
+            Real wire_density_dot = 0.0;
+            Real density_norm2 = 0.0;
+            Real wire_norm2 = 0.0;
+            #pragma omp parallel for reduction(+:wire_density_dot,density_norm2,wire_norm2) schedule(static)
+            for (int i = 0; i < static_cast<int>(gradient.size()); ++i) {
+                wire_density_dot += wire_gradient[i] * density_normal[i];
+                density_norm2 += density_normal[i] * density_normal[i];
+                wire_norm2 += wire_gradient[i] * wire_gradient[i];
+            }
+            const Real tangent_coefficient = wire_density_dot < 0.0
+                ? wire_density_dot / std::max<Real>(density_norm2, 1.0e-30)
+                : 0.0;
+            const Real overflow_band = std::max<Real>(
+                config.stop_overflow - config.refinement_lower_overflow, 1.0e-4);
+            const Real recovery_fraction = std::clamp(
+                (d.overflow - config.stop_overflow) / overflow_band, 0.0, 1.0);
+            const Real recovery_scale = recovery_fraction * std::sqrt(
+                wire_norm2 / std::max<Real>(density_norm2, 1.0e-30));
+            #pragma omp parallel for schedule(static)
+            for (int i = 0; i < static_cast<int>(gradient.size()); ++i) {
+                gradient[i] = wire_gradient[i] -
+                    tangent_coefficient * density_normal[i] +
+                    recovery_scale * density_normal[i];
+            }
+        } else {
+            const int movable_count = static_cast<int>(db.movable_ids.size());
+            const int filler_count = static_cast<int>(fillers.size());
+            #pragma omp parallel for schedule(static)
+            for (int i = 0; i < movable_count; ++i) {
+                const int id = db.movable_ids[i];
+                const Node& node = db.nodes[id];
+                const Real preconditioner = std::max<Real>(
+                    1.0, db.node_pin_weight[id] + lambda * node.area());
+                gradient[i] = (wgx[id] + lambda * dgx[id] +
+                                 obstacle_weight * (stage == 3 ? obstacle_gx[id] : 0.0)) /
+                                preconditioner;
+                gradient[n + i] = (wgy[id] + lambda * dgy[id] +
+                                   obstacle_weight * (stage == 3 ? obstacle_gy[id] : 0.0)) /
+                                  preconditioner;
+            }
+            #pragma omp parallel for schedule(static)
+            for (int i = 0; i < filler_count; ++i) {
+                const std::size_t index = db.movable_ids.size() + i;
+                const Real preconditioner = std::max<Real>(
+                    1.0, lambda * fillers[i].width * fillers[i].height);
+                gradient[index] = lambda * fgx[i] / preconditioner;
+                gradient[n + index] = lambda * fgy[i] / preconditioner;
+            }
         }
 
-        const std::vector<Real> previous_positions = capture(db, fillers);
-        std::vector<Real> positions = previous_positions;
+        capture_into(db, fillers, previous_positions);
+        positions = previous_positions;
         const int age = refinement_active ? iteration - refinement_start + 1
                                           : iteration + 1;
-        for (std::size_t i = 0; i < positions.size(); ++i) {
+        const Real first_bias_denominator = std::max<Real>(
+            1.0e-12, 1.0 - std::pow(config.beta1, age));
+        const Real second_bias_denominator = std::max<Real>(
+            1.0e-12, 1.0 - std::pow(config.beta2, age));
+        #pragma omp parallel for schedule(static)
+        for (int i = 0; i < static_cast<int>(positions.size()); ++i) {
             positions[i] -= coordinate_step(active_optimizer, gradient[i], learning_rate,
-                                             age, config, first[i], second[i],
-                                             maximum_second[i]);
+                                             config, first[i], second[i],
+                                             maximum_second[i],
+                                             first_bias_denominator,
+                                             second_bias_denominator);
         }
         apply(db, fillers, positions);
-        if (config.progressive_legalization) {
+        if (config.progressive_legalization && config.progressive_filter) {
             const std::vector<Real> full_trial = positions;
             bool accepted = false;
             Real fraction = 1.0;
@@ -1060,6 +1235,54 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
             } else {
                 apply(db, fillers, positions);
                 last_filter_fraction = fraction;
+            }
+        }
+        if (config.tangent_refinement && refinement_active &&
+            !config.progressive_legalization) {
+            const std::vector<Real> full_trial = positions;
+            bool accepted = false;
+            Real accepted_fraction = 0.0;
+            for (int backtrack = 0;
+                 backtrack <= config.refinement_filter_backtracks;
+                 ++backtrack) {
+                const Real fraction = std::ldexp(1.0, -backtrack);
+                std::vector<Real> trial(previous_positions.size());
+                #pragma omp parallel for schedule(static)
+                for (int i = 0; i < static_cast<int>(trial.size()); ++i) {
+                    trial[i] = previous_positions[i] +
+                        fraction * (full_trial[i] - previous_positions[i]);
+                }
+                apply(db, fillers, trial);
+                const Real candidate_hpwl = exact_hpwl(db);
+                ++result.objective_evaluations;
+                const DensityResult candidate_density = density->compute(
+                    db, fillers, nullptr, nullptr, nullptr, nullptr);
+                if (candidate_hpwl <= hpwl + 1.0e-9 &&
+                    candidate_density.overflow <= config.stop_overflow) {
+                    positions = std::move(trial);
+                    accepted = true;
+                    accepted_fraction = fraction;
+                    break;
+                }
+            }
+            if (accepted) {
+                apply(db, fillers, positions);
+                tangent_trial_scale = std::min<Real>(
+                    1.0, 1.05 * tangent_trial_scale);
+            } else {
+                apply(db, fillers, previous_positions);
+                std::fill(first.begin(), first.end(), 0.0);
+                std::fill(second.begin(), second.end(), 0.0);
+                std::fill(maximum_second.begin(), maximum_second.end(), 0.0);
+                tangent_trial_scale = std::max<Real>(
+                    1.0e-3, 0.5 * tangent_trial_scale);
+            }
+            if ((!accepted || accepted_fraction < 1.0) &&
+                iteration % config.log_every == 0) {
+                std::cout << "[TangentFilter] iter=" << iteration
+                          << " accepted=" << (accepted ? 1 : 0)
+                          << " fraction=" << accepted_fraction
+                          << " trial_scale=" << tangent_trial_scale << '\n';
             }
         }
         last_serious_step = 1;
@@ -1239,7 +1462,128 @@ GlobalPlaceResult nonsmooth_global_place(Database& db,
                     integral_error, config);
             }
         }
+        adaptive_hpwl_history.push_back(hpwl);
+        adaptive_overflow_history.push_back(d.overflow);
+        while (adaptive_hpwl_history.size() > static_cast<std::size_t>(
+                   config.adaptive_active_set_window)) {
+            adaptive_hpwl_history.pop_front();
+            adaptive_overflow_history.pop_front();
+        }
+        if (config.adaptive_active_set && config.active_set_radius > 0.0 &&
+            (!refinement_active || config.adaptive_active_set_refinement) &&
+            (iteration + 1) % config.adaptive_active_set_interval == 0) {
+            const Real upper = config.stop_overflow + 0.010;
+            const Real lower = std::max<Real>(0.0, config.refinement_lower_overflow);
+            const Real hpwl_rise = hpwl > previous_hpwl * 1.001;
+            const Real old_scale = active_radius_scale;
+            if (config.adaptive_active_smart && adaptive_hpwl_history.size() >=
+                static_cast<std::size_t>(std::max(4, config.adaptive_active_set_window / 2))) {
+                // Use a dead-banded, exponentially filtered signal.  Overflow
+                // is the hard constraint; HPWL only chooses the radius inside
+                // the feasible band.  The log-step cap prevents oscillations
+                // from changing the near-extreme set too abruptly.
+                const std::size_t half = std::max<std::size_t>(
+                    2, adaptive_hpwl_history.size() / 2);
+                const std::size_t split = adaptive_hpwl_history.size() - half;
+                const Real hpwl_old = adaptive_hpwl_history[split - 1];
+                const Real overflow_old = adaptive_overflow_history[split - 1];
+                const Real hpwl_trend = (hpwl - hpwl_old) /
+                    std::max<Real>(std::abs(hpwl_old), 1.0);
+                const Real overflow_trend = d.overflow - overflow_old;
+                const Real band = std::max<Real>(
+                    config.stop_overflow - config.refinement_lower_overflow, 0.005);
+                const Real deadband = std::max<Real>(
+                    config.adaptive_active_set_deadband, 0.0);
+                const Real pressure = (d.overflow - config.stop_overflow) / band;
+                const Real trend = overflow_trend / band;
+                Real signal = 0.0;
+                if (config.adaptive_active_predictive) {
+                    const Real far_threshold = std::max<Real>(
+                        config.stop_overflow + 0.08, 2.0 * config.stop_overflow);
+                    if (refinement_active) adaptive_phase = 3;
+                    else if (d.overflow > far_threshold) adaptive_phase = 1;
+                    else adaptive_phase = 2;
+
+                    const Real expected_drop = std::max<Real>(
+                        0.0, (overflow_old - config.stop_overflow) *
+                        static_cast<Real>(half) /
+                        std::max<Real>(1.0, config.lambda_trajectory_horizon));
+                    const Real actual_drop = overflow_old - d.overflow;
+                    const Real lag = (expected_drop - actual_drop) / band;
+                    const Real hpwl_term = std::clamp(
+                        hpwl_trend / 0.01, -1.0, 1.0);
+                    if (adaptive_phase == 1) {
+                        signal = 0.55 * std::clamp(lag, -1.0, 2.0) +
+                                 0.10 * std::clamp(pressure, 0.0, 2.0) -
+                                 0.10 * hpwl_term;
+                    } else if (adaptive_phase == 2) {
+                        signal = 0.40 * std::clamp(pressure, -1.0, 1.5) +
+                                 0.25 * std::clamp(lag, -1.0, 1.0) -
+                                 0.45 * hpwl_term;
+                    } else {
+                        signal = 0.25 * std::clamp(pressure, -1.0, 1.0) -
+                                 0.65 * hpwl_term;
+                    }
+                } else {
+                    if (d.overflow > config.stop_overflow + deadband)
+                        signal += 0.75 * pressure + 0.25 * std::max<Real>(trend, 0.0);
+                    else if (d.overflow < config.refinement_lower_overflow - deadband)
+                        signal -= 0.65 * (-pressure) + 0.20 * std::max<Real>(-trend, 0.0);
+                    else if (hpwl_trend > 0.0015)
+                        signal -= 0.55 * std::min<Real>(hpwl_trend / 0.01, 1.0);
+                    else if (hpwl_trend < -0.0015)
+                        signal += 0.20 * std::min<Real>(-hpwl_trend / 0.01, 1.0);
+                }
+                const Real ema_keep = config.adaptive_active_predictive ? 0.80 : 0.70;
+                adaptive_signal_ema = ema_keep * adaptive_signal_ema +
+                    (1.0 - ema_keep) * signal;
+                const Real configured_max_step = refinement_active &&
+                    config.adaptive_active_predictive
+                    ? config.adaptive_active_set_refinement_max_log_step
+                    : config.adaptive_active_set_max_log_step;
+                const Real max_log_step = std::max<Real>(configured_max_step, 0.002);
+                const Real log_step = std::clamp(
+                    0.07 * config.adaptive_active_set_gain * adaptive_signal_ema,
+                    -max_log_step, max_log_step);
+                active_radius_scale *= std::exp(log_step);
+                std::cout << "[AdaptiveEpsilonSmart] iter=" << iteration
+                          << " hpwl_trend=" << hpwl_trend
+                          << " overflow_trend=" << overflow_trend
+                          << " signal=" << adaptive_signal_ema
+                          << " phase=" << adaptive_phase
+                          << " log_step=" << log_step;
+            } else if (d.overflow > upper) {
+                active_radius_scale *= 1.10;
+            } else if (d.overflow < lower) {
+                active_radius_scale *= 0.90;
+            } else if (hpwl_rise && d.overflow <= config.stop_overflow) {
+                active_radius_scale *= 0.85;
+            } else if (!hpwl_rise && d.overflow <= config.stop_overflow + 0.002) {
+                active_radius_scale *= 1.03;
+            }
+            active_radius_scale = std::clamp(
+                active_radius_scale,
+                config.adaptive_active_set_min_scale,
+                config.adaptive_active_set_max_scale);
+            if (std::abs(active_radius_scale - old_scale) > 1.0e-12) {
+                std::cout << "[AdaptiveEpsilon] iter=" << iteration
+                          << " overflow=" << d.overflow
+                          << " hpwl=" << hpwl
+                          << " scale=" << active_radius_scale << '\n';
+            }
+        }
+        profile_update += std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - profile_iteration_start).count();
         previous_hpwl = hpwl;
+    }
+
+    if (config.profile) {
+        std::cout << "[Profile] density_seconds=" << profile_density
+                  << " wirelength_seconds=" << profile_wire
+                  << " total_loop_seconds=" << profile_update
+                  << " other_seconds=" << std::max<Real>(
+                      0.0, profile_update - profile_density - profile_wire)
+                  << '\n';
     }
 
     if (config.progressive_legalization && !best_progressive.empty()) {

@@ -63,8 +63,22 @@ private:
     Real target_density_ = 1.0;
     ElectricFieldModel field_model_ = ElectricFieldModel::FiniteDifference;
     Real movable_area_ = 0.0;
+    std::vector<Real> movable_effective_width_;
+    std::vector<Real> movable_effective_height_;
+    std::vector<Real> movable_charge_ratio_;
+    std::vector<Real> filler_effective_width_;
+    std::vector<Real> filler_effective_height_;
+    std::vector<Real> filler_charge_ratio_;
     std::vector<Real> fixed_density_;
     std::vector<Real> density_;
+    std::vector<Real> rho_;
+    std::vector<Real> coefficients_;
+    std::vector<Real> potential_;
+    std::vector<Real> grad_phi_x_;
+    std::vector<Real> grad_phi_y_;
+    std::vector<Real> kx_;
+    std::vector<Real> ky_;
+    std::vector<Real> inverse_k2_;
 };
 
 void clamp_to_region(Database& db, std::vector<Filler>& fillers);

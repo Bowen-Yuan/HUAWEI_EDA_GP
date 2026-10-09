@@ -60,10 +60,15 @@ struct GlobalPlaceConfig {
     Real bundle_prox_scale = 1.0;
     Real bundle_current_mix = 0.50;
     bool feasible_refinement = false;
+    Real refinement_start_overflow = -1.0;
     Real refinement_lower_overflow = 0.065;
     Real refinement_learning_rate_scale = 0.05;
     Real refinement_lambda_gain = 0.20;
     GlobalOptimizer refinement_optimizer = GlobalOptimizer::AMSGrad;
+    Real refinement_active_set_radius = -1.0;
+    int refinement_active_set_decay_iterations = 0;
+    bool tangent_refinement = false;
+    int refinement_filter_backtracks = 6;
     bool legal_checkpoint_selection = false;
     int legal_checkpoint_interval = 20;
     int legal_checkpoint_detailed_passes = 1;
@@ -80,6 +85,28 @@ struct GlobalPlaceConfig {
     int gradient_sampling_samples = 0;
     int gradient_sampling_interval = 5;
     Real gradient_sampling_radius = 0.25;
+    int refinement_gradient_sampling_samples = 0;
+    Real refinement_gradient_sampling_radius = 0.25;
+    Real active_set_radius = 0.0;
+    Real active_set_power = 2.0;
+    // Experimental, opt-in radius controller.  The legacy fixed-radius path
+    // remains unchanged when this flag is false.
+    bool adaptive_active_set = false;
+    bool adaptive_active_smart = false;
+    // Experimental second-generation controller.  It keeps the exact HPWL
+    // objective and only changes the epsilon-active trial direction.
+    bool adaptive_active_predictive = false;
+    Real adaptive_active_set_min_scale = 0.40;
+    Real adaptive_active_set_max_scale = 1.20;
+    int adaptive_active_set_interval = 25;
+    int adaptive_active_set_window = 50;
+    Real adaptive_active_set_gain = 1.0;
+    Real adaptive_active_set_deadband = 0.0015;
+    Real adaptive_active_set_max_log_step = 0.06;
+    bool adaptive_active_set_refinement = false;
+    Real adaptive_active_set_refinement_max_log_step = 0.01;
+    Real adaptive_active_set_span_cap = 0.0;
+    Real primal_dual_step = 0.0;
     bool serious_bundle = false;
     Real serious_step_ratio = 0.10;
     Real bundle_overflow_tolerance = 0.0;
@@ -98,9 +125,11 @@ struct GlobalPlaceConfig {
     Real progressive_congestion_gain = 2.0;
     int progressive_obstacle_iterations = 200;
     int progressive_filter_backtracks = 6;
+    bool progressive_filter = true;
     int snapshot_every = 0;
     std::string snapshot_dir;
     std::string metrics_path;
+    bool profile = false;
 };
 
 struct GlobalPlaceResult {
