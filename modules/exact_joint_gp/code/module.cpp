@@ -68,6 +68,18 @@ void register_exact_joint_gp(ModuleRegistry& registry) {
         p.log_every=c.value("log_every",p.log_every);
         p.adaptive_epsilon=c.value("adaptive_epsilon",p.adaptive_epsilon);
         p.snapshot_every=0; p.output_dir.clear();
+        if (context.log_iteration) {
+            p.iteration_hook = [&context](int iteration, ea::Real hpwl,
+                                          ea::Real overflow_ratio, ea::Real lambda,
+                                          ea::Real learning_rate) {
+                context.log_iteration(iteration, "exact_joint_gp", Json{
+                    {"hpwl", hpwl},
+                    {"overflow_percent", overflow_ratio * 100.0},
+                    {"lambda", lambda},
+                    {"learning_rate", learning_rate},
+                    {"objective_evaluations", 2}});
+            };
+        }
         p.coarse_flow.bins_x=std::min(64,context.density.bins_x);
         p.coarse_flow.bins_y=std::min(64,context.density.bins_y);
         const auto result=ea::global_place(context.db,p); clamp_movable(context.db);
